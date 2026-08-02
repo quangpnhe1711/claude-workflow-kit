@@ -1,0 +1,22 @@
+{
+  "name": "claude-workflow-kit-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "e2e": "npm run build && node scripts/e2e.mjs",
+    "dev:monitor": "npm run dev --workspace @claude-workflow-kit/monitor-ui",
+    "clean": "node -e \"for (const p of ['workflow-core','monitor-server','monitor-ui','installer']) require('fs').rmSync('packages/'+p+'/dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

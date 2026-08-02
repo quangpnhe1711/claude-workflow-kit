@@ -1,0 +1,29 @@
+{
+  "name": "@claude-workflow-kit/monitor-server",
+  "version": "0.1.0",
+  "description": "Runtime state API and SSE stream for the workflow monitor",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "cw-monitor": "./bin/cw-monitor.mjs"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@claude-workflow-kit/workflow-core": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "typescript": "^5.6.3"
+  }
+}

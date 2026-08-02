@@ -1,0 +1,24 @@
+{
+  "id": "senior-dev",
+  "label": "Senior Dev",
+  "description": "Evidence-first controlled engineering workflow with hard business and root-cause gates, convention reuse, scope discipline, independent review and post-implementation assessment.",
+  "workflows": ["feature-change", "bug-fix", "generic"],
+  "skills": [
+    "work",
+    "feature-change",
+    "bug-fix",
+    "refresh-conventions",
+    "wf-status",
+    "wf-evidence-reconciliation",
+    "wf-bug-root-cause",
+    "wf-business-decision",
+    "wf-change-readiness",
+    "wf-convention-manager",
+    "wf-implement",
+    "wf-validation-e2e",
+    "wf-product-assessment",
+    "wf-final-report"
+  ],
+  "agents": ["business-analyst", "root-cause-analyst", "independent-reviewer"],
+  "claudeMd": "claude-md.md"
+}

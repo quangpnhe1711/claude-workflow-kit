@@ -1,0 +1,7 @@
+{
+  "name": "cwk-demo-project",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Fixture project used to verify claude-workflow-kit install and run flow end to end"
+}

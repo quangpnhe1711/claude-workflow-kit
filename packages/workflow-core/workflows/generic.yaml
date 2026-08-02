@@ -1,0 +1,22 @@
+id: generic
+label: Generic Task
+description: >-
+  Minimal run used when monitoring is enabled and a prompt does not belong to a
+  controlled workflow. Records Claude runtime activity only. Carries no gates.
+
+nodes:
+  - id: prompt
+    label: User Prompt
+    kind: start
+  - id: working
+    label: Working
+    description: Unstructured work. Runtime activity is tracked, no semantic gates apply.
+  - id: done
+    label: Done
+    kind: end
+
+edges:
+  - from: prompt
+    to: working
+  - from: working
+    to: done

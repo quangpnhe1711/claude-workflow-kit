@@ -1,0 +1,115 @@
+id: feature-change
+label: Feature Change
+description: >-
+  Controlled feature/change workflow. Reconcile evidence, resolve business
+  behavior behind a hard gate, plan impact/risk/scope/tests, implement,
+  validate, review independently, assess, report.
+
+nodes:
+  - id: prompt
+    label: User Prompt
+    kind: start
+    description: Task and evidence inputs received.
+
+  - id: evidence
+    label: Evidence Analysis
+    skill: wf-evidence-reconciliation
+    artifact: evidence.md
+    description: Reconcile intent, requirement documents, DB, code and tests. Surface contradictions.
+
+  - id: business
+    label: Business Decision
+    skill: wf-business-decision
+    gate: BUSINESS_READY
+    artifact: business-decision.md
+    description: Resolve desired business behavior. Coding forbidden until BUSINESS_READY.
+
+  - id: await-business
+    label: Waiting For User
+    kind: waiting
+    gate: BUSINESS_READY
+    description: A material business decision is open. Waiting for the user.
+
+  - id: readiness
+    label: Impact / Risk / Scope
+    skill: wf-change-readiness
+    artifact: implementation-plan.md
+    description: Implementation plan, cross-module impact, risks, scope boundaries, test strategy.
+
+  - id: conventions
+    label: Conventions
+    skill: wf-convention-manager
+    description: Load cached conventions, refresh only missing or stale areas.
+
+  - id: implementation
+    label: Implementation
+    skill: wf-implement
+    description: Smallest correct change within approved scope.
+
+  - id: validation
+    label: Validation
+    skill: wf-validation-e2e
+    artifact: validation.md
+    description: Execute the predefined test strategy with evidence.
+
+  - id: e2e
+    label: E2E
+    skill: wf-validation-e2e
+    description: Runtime/end-to-end verification of the real flow where feasible.
+
+  - id: review
+    label: Independent Review
+    agent: independent-reviewer
+    description: Independent read-only review of the final diff. Max 3 fix loops.
+
+  - id: assessment
+    label: Product Assessment
+    skill: wf-product-assessment
+    artifact: assessment.md
+    description: Evidence-backed product/technical observations. Report-only.
+
+  - id: report
+    label: Final Report
+    skill: wf-final-report
+    artifact: final-report.md
+    description: Compact outcome, evidence, risks, recommendations.
+
+  - id: done
+    label: Done
+    kind: end
+
+edges:
+  - from: prompt
+    to: evidence
+  - from: evidence
+    to: business
+  - from: business
+    to: await-business
+    when: "!BUSINESS_READY"
+    label: blocked
+  - from: await-business
+    to: business
+    label: answered
+  - from: business
+    to: readiness
+    when: BUSINESS_READY
+    label: ready
+  - from: readiness
+    to: conventions
+  - from: conventions
+    to: implementation
+  - from: implementation
+    to: validation
+  - from: validation
+    to: e2e
+  - from: e2e
+    to: review
+  - from: review
+    to: implementation
+    label: findings
+  - from: review
+    to: assessment
+  - from: assessment
+    to: report
+  - from: report
+    to: done

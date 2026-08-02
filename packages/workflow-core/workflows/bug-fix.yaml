@@ -1,0 +1,131 @@
+id: bug-fix
+label: Bug Fix
+description: >-
+  Controlled defect workflow. Reproduce and establish causal root cause behind
+  a hard gate, resolve expected business behavior, plan, implement the smallest
+  root-cause fix, validate, review independently, assess, report.
+
+nodes:
+  - id: prompt
+    label: User Prompt
+    kind: start
+    description: Symptom, reproduction, expected vs actual.
+
+  - id: root-cause
+    label: Root Cause
+    skill: wf-bug-root-cause
+    gate: ROOT_CAUSE_READY
+    artifact: root-cause.md
+    description: Reproduce, trace current/legacy flow, separate symptom / contributing factor / root cause.
+
+  - id: await-root-cause
+    label: Waiting For User
+    kind: waiting
+    gate: ROOT_CAUSE_READY
+    description: Root cause cannot be established from available evidence. Waiting for the user.
+
+  - id: business
+    label: Business Decision
+    skill: wf-business-decision
+    gate: BUSINESS_READY
+    artifact: business-decision.md
+    description: Resolve the expected behavior the fix must produce.
+
+  - id: await-business
+    label: Waiting For User
+    kind: waiting
+    gate: BUSINESS_READY
+    description: A material business decision is open. Waiting for the user.
+
+  - id: readiness
+    label: Impact / Risk / Scope
+    skill: wf-change-readiness
+    artifact: implementation-plan.md
+    description: Plan, direct and indirect impact, risks, scope, regression test strategy.
+
+  - id: conventions
+    label: Conventions
+    skill: wf-convention-manager
+    description: Load cached conventions, refresh only missing or stale areas.
+
+  - id: implementation
+    label: Implementation
+    skill: wf-implement
+    description: Smallest safe fix that addresses the root cause, not the symptom.
+
+  - id: validation
+    label: Validation
+    skill: wf-validation-e2e
+    artifact: validation.md
+    description: Regression validation against the predefined strategy.
+
+  - id: e2e
+    label: E2E
+    skill: wf-validation-e2e
+    description: Runtime verification that the reported symptom is gone.
+
+  - id: review
+    label: Independent Review
+    agent: independent-reviewer
+    description: Independent read-only review of the final diff. Max 3 fix loops.
+
+  - id: assessment
+    label: Product Assessment
+    skill: wf-product-assessment
+    artifact: assessment.md
+    description: Evidence-backed product/technical observations. Report-only.
+
+  - id: report
+    label: Final Report
+    skill: wf-final-report
+    artifact: final-report.md
+    description: Compact outcome, evidence, risks, recommendations.
+
+  - id: done
+    label: Done
+    kind: end
+
+edges:
+  - from: prompt
+    to: root-cause
+  - from: root-cause
+    to: await-root-cause
+    when: "!ROOT_CAUSE_READY"
+    label: blocked
+  - from: await-root-cause
+    to: root-cause
+    label: answered
+  - from: root-cause
+    to: business
+    when: ROOT_CAUSE_READY
+    label: root cause established
+  - from: business
+    to: await-business
+    when: "!BUSINESS_READY"
+    label: blocked
+  - from: await-business
+    to: business
+    label: answered
+  - from: business
+    to: readiness
+    when: BUSINESS_READY
+    label: ready
+  - from: readiness
+    to: conventions
+  - from: conventions
+    to: implementation
+  - from: implementation
+    to: validation
+  - from: validation
+    to: e2e
+  - from: e2e
+    to: review
+  - from: review
+    to: implementation
+    label: findings
+  - from: review
+    to: assessment
+  - from: assessment
+    to: report
+  - from: report
+    to: done

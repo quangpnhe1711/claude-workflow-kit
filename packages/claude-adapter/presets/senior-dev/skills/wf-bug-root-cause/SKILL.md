@@ -1,0 +1,40 @@
+---
+name: wf-bug-root-cause
+description: Internal bug-analysis step that reproduces the issue, traces current/legacy code flow, explains why it fails, and establishes root cause before any fix.
+user-invocable: false
+effort: high
+---
+
+Do not edit product code.
+
+1. Reproduce the bug when feasible.
+2. Capture expected vs actual behavior.
+3. Trace the relevant current/legacy path end-to-end:
+   UI/request -> controller/handler -> service/domain -> repository/integration -> DB/state -> response/UI.
+4. Explain the old/current implementation:
+   - what data it reads;
+   - what decisions it makes;
+   - what state it changes;
+   - why those decisions lead to the observed symptom.
+5. Separate:
+   - SYMPTOM
+   - CONTRIBUTING FACTORS
+   - ROOT CAUSE
+6. Identify the smallest safe root-cause fix direction.
+7. Identify whether existing tests encode the buggy behavior.
+
+Root cause must be causal, not merely "line X is wrong".
+
+If reproduction fails:
+- say NOT_REPRODUCED;
+- continue static tracing if deterministic evidence is available;
+- do not pretend runtime confirmation exists.
+
+Persist to `.ai-workflow/runs/<runId>/root-cause.md` and record it with
+`cw artifact root-cause.md`.
+
+Gate outcome:
+- causal root cause established -> `cw gate pass ROOT_CAUSE_READY`
+- not establishable -> `cw gate wait ROOT_CAUSE_READY --message "<what is missing>"`
+
+For deep read-only tracing, delegate to the `root-cause-analyst` agent.
