@@ -31,10 +31,16 @@ If reproduction fails:
 - do not pretend runtime confirmation exists.
 
 Persist to `.ai-workflow/runs/<runId>/root-cause.md` and record it with
-`cw artifact root-cause.md`.
+`cw artifact root-cause.md`. Write the file **before** touching the gate:
+`cw gate pass ROOT_CAUSE_READY` is refused while `root-cause.md` is missing, and
+while the gate is open the hook denies every file edit.
 
 Gate outcome:
 - causal root cause established -> `cw gate pass ROOT_CAUSE_READY`
 - not establishable -> `cw gate wait ROOT_CAUSE_READY --message "<what is missing>"`
 
-For deep read-only tracing, delegate to the `root-cause-analyst` agent.
+For deep read-only tracing, delegate to the `root-cause-analyst` agent: pass the
+symptom, reproduction and `runDir`, and expect its structured output back.
+
+Return the analysis to the calling workflow. Interrupt the user only when the
+gate has to wait.

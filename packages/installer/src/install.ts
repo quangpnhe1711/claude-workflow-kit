@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { DEFAULT_CONFIG, type KitConfig } from '@claude-workflow-kit/workflow-core';
+import { DEFAULT_CONFIG, resolveRuntimeDirName, type KitConfig } from '@claude-workflow-kit/workflow-core';
 import {
   backup,
   mergeClaudeMd,
@@ -74,15 +74,28 @@ the \`claude-workflow-kit\` package, not in this directory.
 - \`workflows/\` — optional project-specific workflow definitions that override
   the built-in ones by id.
 
+- \`sessions.json\` — Claude session id -> run id, so two sessions in one repo
+  never write to each other's run.
+
 State is owned by the \`cw\` CLI. Do not hand-edit \`state.json\`.
 
-Suggested policy: commit \`conventions/\`, gitignore \`runs/\` and \`current-run\`
-unless run evidence should be shared.
+Commit \`conventions/\` — that is shared repository knowledge. Everything else
+here is machine-local and is gitignored by the installed \`.gitignore\`;
+\`config.json\` in particular holds an absolute \`runtimeUrl\` for this machine.
 `;
 
 const RUNS_GITIGNORE = `# run evidence is local working state by default; delete this file to commit it
 *
 !.gitignore
+`;
+
+// Machine-local files. `config.json` carries an absolute `runtimeUrl` resolved
+// on this machine, so committing it breaks every other clone.
+const RUNTIME_GITIGNORE = `current-run
+sessions.json
+hook-errors.log
+installed.json
+config.json
 `;
 
 export function install(options: InstallOptions): InstallResult {
@@ -91,11 +104,9 @@ export function install(options: InstallOptions): InstallResult {
   const dryRun = options.dryRun ?? false;
   const preset: Preset = loadPreset(options.preset ?? 'senior-dev');
 
-  const existingConfig = readJsonFile<KitConfig>(
-    join(projectRoot, options.runtimeDir ?? DEFAULT_CONFIG.runtimeDir, 'config.json'),
-  );
-  const runtimeDirName =
-    options.runtimeDir ?? existingConfig?.runtimeDir ?? DEFAULT_CONFIG.runtimeDir;
+  // `update` must not silently relocate a project installed with --runtime <dir>.
+  const runtimeDirName = resolveRuntimeDirName(projectRoot, options.runtimeDir);
+  const existingConfig = readJsonFile<KitConfig>(join(projectRoot, runtimeDirName, 'config.json'));
   const runtimeDir = join(projectRoot, runtimeDirName);
   const claudeDir = join(projectRoot, '.claude');
 
@@ -128,6 +139,9 @@ export function install(options: InstallOptions): InstallResult {
   if (!existsSync(join(runtimeDir, 'runs', '.gitignore'))) {
     write(result, join(runtimeDir, 'runs', '.gitignore'), RUNS_GITIGNORE, dryRun);
   }
+  if (!existsSync(join(runtimeDir, '.gitignore'))) {
+    write(result, join(runtimeDir, '.gitignore'), RUNTIME_GITIGNORE, dryRun);
+  }
 
   // --- skills and agents ---
   for (const skill of preset.skills) {
@@ -157,6 +171,13 @@ export function install(options: InstallOptions): InstallResult {
     const to = join(claudeDir, 'hooks', 'cw-hook.mjs');
     copy(result, hookSourceFile(), to, dryRun);
     result.manifest.files.push(relative(projectRoot, to).replace(/\\/g, '/'));
+
+    // The hook, `cw` from a skill, doctor and the monitor all start with no
+    // flags. A non-default `--runtime <dir>` has to be discoverable, or the hook
+    // silently finds no config and every gate stops being enforced.
+    const pointer = join(claudeDir, 'cw-runtime');
+    write(result, pointer, `${runtimeDirName}\n`, dryRun);
+    result.manifest.files.push(relative(projectRoot, pointer).replace(/\\/g, '/'));
 
     const settingsFile = join(claudeDir, 'settings.json');
     const template = JSON.parse(readFileSync(settingsTemplateFile(), 'utf8')) as SettingsLike;
@@ -206,7 +227,7 @@ export interface UninstallResult {
 export function uninstall(options: UninstallOptions): UninstallResult {
   const projectRoot = resolve(options.projectRoot);
   const dryRun = options.dryRun ?? false;
-  const runtimeDirName = options.runtimeDir ?? DEFAULT_CONFIG.runtimeDir;
+  const runtimeDirName = resolveRuntimeDirName(projectRoot, options.runtimeDir);
   const runtimeDir = join(projectRoot, runtimeDirName);
   const removed: string[] = [];
   const kept: string[] = [];

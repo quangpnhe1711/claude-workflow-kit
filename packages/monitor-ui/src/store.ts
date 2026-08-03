@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { nextSelectedRunId } from './graphModel';
 import type { RunDetail, Snapshot } from './types';
 
 interface MonitorState {
@@ -29,12 +30,7 @@ export const useMonitor = create<MonitorState>((set, get) => ({
   error: null,
 
   setSnapshot: (snapshot) => {
-    const { selectedRunId } = get();
-    const stillExists = snapshot.runs.some((r) => r.runId === selectedRunId);
-    // Follow the active run until the user picks one explicitly.
-    const nextSelected = stillExists
-      ? selectedRunId
-      : snapshot.currentRunId ?? snapshot.runs[0]?.runId ?? null;
+    const nextSelected = nextSelectedRunId(get().selectedRunId, snapshot.runs, snapshot.currentRunId);
     set({ snapshot, selectedRunId: nextSelected, connection: 'live', error: null });
   },
 

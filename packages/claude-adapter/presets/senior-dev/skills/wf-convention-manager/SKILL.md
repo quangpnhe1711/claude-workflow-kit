@@ -17,11 +17,15 @@ Expected:
 
 Algorithm:
 
+0. Run `cw conventions status`. It reports, per area: present/missing, whether
+   the recorded evidence files still exist, and whether any of them changed
+   since the last refresh. That is a filesystem fact — prefer it over judgement.
 1. Determine which convention areas are relevant to current scope.
 2. Load existing relevant artifacts.
-3. Reuse them by default.
+3. Reuse every area the status report marks `OK`.
 4. Do NOT rescan the whole codebase on every task.
-5. Refresh only when:
+5. Refresh the areas it marks `MISSING`, `STALE` or `UNRECORDED`, and otherwise
+   only when:
    - artifact/section is missing;
    - evidence is stale due to material framework/architecture/module change;
    - nearby code repeatedly contradicts cached guidance;
@@ -37,4 +41,14 @@ Never generate comments just to increase documentation.
 Follow observed comment language/style and prefer WHY/business
 rationale/compatibility/non-obvious constraints over obvious WHAT.
 
+Precedence, highest first:
+1. a local intentional convention in the code being touched;
+2. this cache;
+3. a generic external comment/style skill or default.
+
+An external generic skill never overrides a convention this repository
+demonstrably follows.
+
 If bootstrap is required, follow the same evidence rules as `refresh-conventions`.
+
+Return the loaded conventions and any refresh performed to the calling workflow.

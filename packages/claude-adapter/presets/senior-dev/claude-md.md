@@ -2,26 +2,32 @@
 
 ### Execution mode
 
-Default behavior is quiet execution.
+COMPRESS WORDING, NOT SUBSTANCE.
 
-Do not narrate routine actions such as:
-- reading/searching files;
-- tracing symbols;
-- editing files;
-- running normal builds/tests;
-- checking git diff.
+Quiet is about narration, never about work. Depth budget:
 
-Raise an issue only when a real decision/blocker/risk exists.
+| Activity | Depth | Visible in chat |
+| --- | --- | --- |
+| Execution narration (read/search/trace/edit/build/test/diff) | LOW | no |
+| Analysis, evidence reconciliation, root cause, impact | HIGH | only the conclusion |
+| Review and final report | HIGH | yes, in full |
 
-When raising an issue, be concise:
+Do not narrate routine actions such as reading/searching files, tracing
+symbols, editing files, running builds/tests, or checking git diff.
+
+Raise an issue only when a real decision/blocker/risk exists. When raising one:
 1. Problem
 2. Impact
 3. Recommended resolution
 4. Decision required
 
-If the skill or plugin `caveman:caveman-compress` is available, use it for
-user-facing responses. If it is not available, apply the compact-output policy
-above unchanged. Workflow correctness never depends on it.
+Never shorten an analysis, a review or a final report to look terse. Cutting
+the number of findings is not compression; it is skipping work. Cut adjectives,
+progress commentary and restatement instead.
+
+This policy is self-contained. Do not delegate output shaping to an external
+compression skill or plugin: workflow correctness must not depend on one, and a
+file-rewriting tool is not an output style.
 
 ### Evidence policy
 
@@ -38,6 +44,24 @@ Classify conclusions as:
 When evidence conflicts, expose the conflict. Do not silently choose one source.
 
 ### Hard gates
+
+Gates are enforced by the toolkit, not only by this file. While any active run in
+this project has an unpassed gate, the `PreToolUse` hook denies:
+
+- every file-writing tool — `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, MCP
+  filesystem writers;
+- arbitrary command execution — `Bash`, `PowerShell` and any other
+  command-running tool, unless the command is read-only (`git status/diff/log/
+  show`, `grep`/`rg`/`ls`/`cat`, `cw …`) or a test/build command.
+
+What stays writable behind the gate is the evidence the gate itself needs: a
+write to `.ai-workflow/runs/<runId>/<file>` where `<file>` is the artifact the
+*current* phase declares. Enter the phase first, then write its artifact.
+
+A denial is information: the gate is open. Resolve the gate, never route around
+it. Retiring the run (`cw run abandon`, `cw run start --force`) is the only way
+past an open gate, it requires a stated reason, and the unpassed gates are
+recorded — so use it when the task is genuinely withdrawn, never to keep working.
 
 #### Business gate
 NO BUSINESS DECISION = NO CODING.
@@ -89,6 +113,10 @@ Do not claim PASS without evidence.
 
 Reuse persisted conventions from `.ai-workflow/conventions/`.
 
+Run `cw conventions status` to see which areas are cached, verified, stale or
+missing, and which evidence files they were derived from. Trust that report over
+a guess.
+
 Do not rediscover conventions on every task.
 
 Refresh only when:
@@ -138,10 +166,37 @@ cw run complete
 
 Rules:
 - Never edit `.ai-workflow/runs/**/state.json` by hand. The CLI owns it.
-- Emit the transition when the phase actually starts or ends, not in a batch at the end.
+- Emit the transition when the phase actually starts or ends, not in a batch at
+  the end. Batching produces `SEMANTIC_LAG`: the monitor reports that Claude is
+  active while the diagram is frozen.
+- One task, one run. `cw run start` refuses to open a second run while one is
+  live. To continue a parked run just answer the question — the run resumes.
+  To retire one deliberately: `cw run abandon --message "<why>"`.
+- A gate is decided at the phase that owns it, and only once that phase's
+  declared artifact exists on disk as a non-empty file. `cw gate pass` refuses
+  otherwise and has no `--force`; `cw gate override <GATE> --reason "<why>"` is a
+  separate, audited command for a decision the user made outside the run.
+- Declared artifacts are enforced on leaving a phase: `cw phase complete` and the
+  next `cw phase enter` both refuse while one is missing or empty. Write the
+  file; `--allow-missing-artifacts --reason "<why>"` is an audited exception, not
+  a shortcut.
+- `cw run complete` is verified: all gates passed, all phases completed or
+  skipped, nothing waiting on the user, all required artifacts present. A run
+  that cannot finish is retired with `cw run abandon`, which is not success.
+- Another Claude session's run is not yours to steer. `cw phase`, `cw gate` and
+  `cw run complete/fail/abandon` are refused for a run owned by another session;
+  take it over deliberately with `cw run claim <runId> --force --reason "<why>"`.
 - If `cw` is unavailable, continue the engineering work normally and report the
   missing CLI once in the final report. Monitoring is observability, not a gate.
-- `cw status` shows the active run and the legal next phases.
+- `cw status` shows the active run, the open gates, whether mutation is
+  currently denied, and the legal next phases.
+
+### Internal step skills
+
+Skills named `wf-*` are steps inside a workflow, not conversations. They return
+their findings to the workflow that invoked them. They do not write a long
+report to the user; the only steps that address the user are the final report
+and an explicit blocking question.
 
 ### Final response
 

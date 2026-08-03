@@ -40,7 +40,10 @@ nodes:
   - id: readiness
     label: Impact / Risk / Scope
     skill: wf-change-readiness
-    artifact: implementation-plan.md
+    artifacts:
+      - implementation-plan.md
+      - impact-risk-scope.md
+      - test-strategy.md
     description: Plan, direct and indirect impact, risks, scope, regression test strategy.
 
   - id: conventions
@@ -67,6 +70,7 @@ nodes:
   - id: review
     label: Independent Review
     agent: independent-reviewer
+    artifact: review.md
     description: Independent read-only review of the final diff. Max 3 fix loops.
 
   - id: assessment

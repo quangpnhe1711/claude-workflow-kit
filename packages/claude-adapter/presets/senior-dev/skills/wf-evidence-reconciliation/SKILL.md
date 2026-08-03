@@ -29,3 +29,9 @@ Do not raise every mismatch: raise only contradictions that materially affect
 behavior, data, permissions, compatibility, or implementation direction.
 
 For deep read-only reconciliation, delegate to the `business-analyst` agent.
+Pass the stated outcome, `runDir` and the source entry points — not your own
+summary of them. Expect its structured output back and fold it into
+`evidence.md`.
+
+Return the reconciliation to the calling workflow. Do not write a long report to
+the user; only an open business decision is worth interrupting for.

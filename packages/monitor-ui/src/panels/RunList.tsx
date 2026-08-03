@@ -26,6 +26,7 @@ export function RunList({ snapshot, selectedRunId, onSelect, nowMs }: Props) {
                   {run.derivedStatus.replace('_', ' ')}
                 </span>
                 {run.runId === snapshot.currentRunId && <span className="chip chip--current">current</span>}
+                {run.derivedSemantic === 'SEMANTIC_LAG' && <span className="chip warn">lag</span>}
               </div>
               <div className="runlist__id">{run.runId}</div>
               <div className="runlist__label">{run.label ?? run.workflow}</div>
@@ -34,6 +35,19 @@ export function RunList({ snapshot, selectedRunId, onSelect, nowMs }: Props) {
           </li>
         ))}
       </ul>
+      {snapshot.unreadableRuns?.length > 0 && (
+        <div
+          className="runlist__broken warn"
+          title='CORRUPT: state.json cannot be read as a run. Retire it with: cw run quarantine-current --reason "corrupt state"'
+        >
+          CORRUPT: {snapshot.unreadableRuns.join(', ')}
+        </div>
+      )}
+      {snapshot.quarantinedRuns && snapshot.quarantinedRuns.length > 0 && (
+        <div className="runlist__broken dim" title="Retired by hand; the files are preserved.">
+          quarantined: {snapshot.quarantinedRuns.join(', ')}
+        </div>
+      )}
     </aside>
   );
 }

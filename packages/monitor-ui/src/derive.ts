@@ -1,4 +1,4 @@
-import type { NodeStatusView, RunView } from './types';
+import type { NodeStatusView, RunView } from './types.js';
 
 export function nodeStatusView(run: RunView, nodeId: string, nowMs: number, thresholdSeconds: number): NodeStatusView {
   const status = run.nodes[nodeId]?.status ?? 'PENDING';

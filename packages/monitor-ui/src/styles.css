@@ -164,8 +164,32 @@ body {
 .pill--failed { color: var(--failed); border-color: var(--failed); }
 .pill--possibly_stalled,
 .pill--stale { color: var(--stale); border-color: var(--stale); }
+.pill--semantic_lag { color: var(--stale); border-color: var(--stale); }
+.pill--policy_degraded { color: var(--failed); border-color: var(--failed); }
+.pill--policy_disabled { color: var(--stale); border-color: var(--stale); }
 .pill--pending,
+.pill--abandoned,
 .pill--skipped { color: var(--dim); }
+
+.phase-node__lag,
+.phase-node__missing {
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.detail__warn {
+  margin: 8px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--stale);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.runlist__broken {
+  margin-top: 8px;
+  font-size: 11px;
+}
 
 .gate {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;

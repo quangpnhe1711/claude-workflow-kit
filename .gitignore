@@ -8,3 +8,4 @@ dist/
 examples/demo-project/.ai-workflow/runs/*/
 !examples/demo-project/.ai-workflow/runs/.gitkeep
 examples/demo-project/.ai-workflow/current-run
+dist-test/

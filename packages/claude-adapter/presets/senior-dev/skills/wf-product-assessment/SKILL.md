@@ -43,3 +43,6 @@ If nothing material exists: `No material follow-up recommendations.`
 
 Persist to `.ai-workflow/runs/<runId>/assessment.md` and record it with
 `cw artifact assessment.md`.
+
+Return the findings to the calling workflow. `wf-final-report` decides what
+reaches the user; do not print the assessment separately.

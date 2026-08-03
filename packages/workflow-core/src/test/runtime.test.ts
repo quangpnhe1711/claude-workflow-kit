@@ -11,7 +11,7 @@ function sandbox(): { dir: string; runtime: WorkflowRuntime; cleanup: () => void
   const dir = mkdtempSync(join(tmpdir(), 'cwk-'));
   const runtime = new WorkflowRuntime({ projectRoot: dir, runtimeDir: '.ai-workflow' });
   runtime.ensureRuntimeDir();
-  return { dir, runtime, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { dir, runtime, cleanup: () => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) };
 }
 
 test('a run persists state, events and the current-run pointer', () => {
@@ -24,6 +24,7 @@ test('a run persists state, events and the current-run pointer', () => {
     assert.equal(runtime.currentRunId(), run.runId);
 
     runtime.enterPhase('evidence');
+    writeFileSync(join(runtime.paths.runDir(run.runId), 'evidence.md'), '# evidence\n');
     runtime.completePhase();
     runtime.enterPhase('business');
     runtime.waitGate('BUSINESS_READY', { message: 'aggregate vs per-entity?' });
@@ -49,6 +50,7 @@ test('a follow-up prompt continues the same run instead of starting a new one', 
   try {
     const run = runtime.startRun('feature-change');
     runtime.enterPhase('evidence');
+    writeFileSync(join(runtime.paths.runDir(run.runId), 'evidence.md'), '# evidence\n');
     runtime.enterPhase('business');
     runtime.waitGate('BUSINESS_READY');
 
@@ -62,7 +64,7 @@ test('a follow-up prompt continues the same run instead of starting a new one', 
   }
 });
 
-test('a prompt with no active run opens a generic run', () => {
+test('an unrelated prompt opens a generic run, not a controlled workflow', () => {
   const { runtime, cleanup } = sandbox();
   try {
     applyHook(runtime, { hook_event_name: 'UserPromptSubmit', prompt: 'what does this repo do' });
@@ -90,6 +92,7 @@ test('completing a run clears the current-run pointer', () => {
   const { runtime, cleanup } = sandbox();
   try {
     runtime.startRun('generic');
+    runtime.enterPhase('working');
     runtime.completeRun();
     assert.equal(runtime.currentRunId(), undefined);
   } finally {
@@ -114,17 +117,77 @@ test('the CLI drives a full run end to end', async () => {
   const base = ['--project', dir, '--runtime', '.ai-workflow'];
   try {
     assert.equal(await runCli([...base, 'run', 'start', 'bug-fix']), 0);
+    const runtime = new WorkflowRuntime({ projectRoot: dir, runtimeDir: '.ai-workflow' });
+    const runId = runtime.currentRunId()!;
+    const evidence = (name: string) =>
+      writeFileSync(join(runtime.paths.runDir(runId), name), `# ${name}\n`, 'utf8');
+
     assert.equal(await runCli([...base, 'phase', 'enter', 'root-cause']), 0);
+    evidence('root-cause.md');
     assert.equal(await runCli([...base, 'gate', 'pass', 'ROOT_CAUSE_READY']), 0);
     assert.equal(await runCli([...base, 'phase', 'enter', 'business']), 0);
+    evidence('business-decision.md');
     assert.equal(await runCli([...base, 'gate', 'pass', 'BUSINESS_READY']), 0);
     assert.equal(await runCli([...base, 'phase', 'enter', 'readiness']), 0);
+
+    // A half-run workflow cannot be declared COMPLETED (HG-04).
+    await assert.rejects(async () => runCli([...base, 'run', 'complete']), /cannot be completed/);
+
+    for (const name of [
+      'implementation-plan.md',
+      'impact-risk-scope.md',
+      'test-strategy.md',
+      'validation.md',
+      'review.md',
+      'assessment.md',
+      'final-report.md',
+    ]) {
+      evidence(name);
+    }
+    for (const node of [
+      'conventions',
+      'implementation',
+      'validation',
+      'e2e',
+      'review',
+      'assessment',
+      'report',
+    ]) {
+      assert.equal(await runCli([...base, 'phase', 'enter', node]), 0, node);
+      assert.equal(await runCli([...base, 'phase', 'complete']), 0, node);
+    }
     assert.equal(await runCli([...base, 'run', 'complete']), 0);
 
-    const runtime = new WorkflowRuntime({ projectRoot: dir, runtimeDir: '.ai-workflow' });
-    const run = runtime.run(runtime.runIds()[0]!);
+    const run = runtime.run(runId);
     assert.equal(run.status, 'COMPLETED');
     assert.equal(run.gates['ROOT_CAUSE_READY'], 'PASSED');
+  } finally {
+    cleanup();
+  }
+});
+
+test('the CLI refuses a gate pass with no evidence and reports a non-zero exit', async () => {
+  const { dir, cleanup } = sandbox();
+  const base = ['--project', dir, '--runtime', '.ai-workflow'];
+  try {
+    assert.equal(await runCli([...base, 'run', 'start', 'feature-change']), 0);
+    assert.equal(await runCli([...base, 'phase', 'enter', 'evidence']), 0);
+    const runtime = new WorkflowRuntime({ projectRoot: dir, runtimeDir: '.ai-workflow' });
+    writeFileSync(join(runtime.paths.runDir(runtime.currentRunId()!), 'evidence.md'), '# e\n');
+    assert.equal(await runCli([...base, 'phase', 'enter', 'business']), 0);
+    // No business-decision.md on disk: the gate must not open.
+    await assert.rejects(async () => {
+      await runCli([...base, 'gate', 'pass', 'BUSINESS_READY']);
+    }, /business-decision\.md/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('conventions status is available from the CLI', async () => {
+  const { dir, cleanup } = sandbox();
+  try {
+    assert.equal(await runCli(['--project', dir, '--runtime', '.ai-workflow', 'conventions', 'status']), 0);
   } finally {
     cleanup();
   }

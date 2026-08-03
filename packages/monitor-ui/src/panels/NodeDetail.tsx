@@ -27,9 +27,15 @@ export function NodeDetail({
   const state = run.nodes[node.id];
   const status = nodeStatusView(run, node.id, nowMs, stallThresholdSeconds);
   const events = (detail?.events ?? []).filter((e) => e.node === node.id || (node.gate && e.gate === node.gate));
-  const artifacts = (detail?.artifacts ?? run.artifacts).filter(
-    (a) => !node.artifact || a === node.artifact || node.kind === 'end',
-  );
+  const present = detail?.artifacts ?? run.artifacts;
+  const declared = node.artifacts ?? [];
+  // A phase owns every artifact it declares; show the missing ones too, because
+  // "declared but absent" is the interesting state.
+  const artifacts: Array<{ name: string; present: boolean }> = declared.length
+    ? declared.map((name) => ({ name, present: present.includes(name) }))
+    : node.kind === 'end'
+      ? present.map((name) => ({ name, present: true }))
+      : [];
   const runningAgents = Object.values(run.agents).filter(
     (a) => a.status === 'RUNNING' && run.currentNode === node.id,
   );
@@ -87,6 +93,13 @@ export function NodeDetail({
 
       {state?.error && <div className="detail__error">{state.error}</div>}
 
+      {run.currentNode === node.id && run.derivedSemantic === 'SEMANTIC_LAG' && (
+        <div className="detail__warn warn">
+          Semantic lag: Claude is still active but no phase transition has been recorded since{' '}
+          {clock(run.lastSemanticAt)}. The diagram may be behind the actual work.
+        </div>
+      )}
+
       {runningAgents.length > 0 && (
         <section>
           <div className="panel__subtitle">Subagents</div>
@@ -105,11 +118,15 @@ export function NodeDetail({
         <section>
           <div className="panel__subtitle">Artifacts</div>
           <ul className="detail__list">
-            {artifacts.map((name) => (
-              <li key={name}>
-                <a href={artifactUrl(run.runId, name)} target="_blank" rel="noreferrer">
-                  {name}
-                </a>
+            {artifacts.map((artifact) => (
+              <li key={artifact.name}>
+                {artifact.present ? (
+                  <a href={artifactUrl(run.runId, artifact.name)} target="_blank" rel="noreferrer">
+                    {artifact.name}
+                  </a>
+                ) : (
+                  <span className="warn">{artifact.name} — declared, not written</span>
+                )}
               </li>
             ))}
           </ul>

@@ -9,6 +9,8 @@
     "bug-fix",
     "refresh-conventions",
     "wf-status",
+    "wf-feature-change",
+    "wf-bug-fix",
     "wf-evidence-reconciliation",
     "wf-bug-root-cause",
     "wf-business-decision",

@@ -18,6 +18,27 @@ function asString(v: unknown, where: string): string {
   return v;
 }
 
+/**
+ * `artifact: x.md` and `artifacts: [x.md, y.md]` both mean "this phase owns
+ * these files". One node may own several, so the list form is canonical.
+ */
+function parseArtifacts(o: Record<string, unknown>, where: string): string[] | undefined {
+  const out: string[] = [];
+  const single = o['artifact'];
+  if (typeof single === 'string' && single) out.push(single);
+  const many = o['artifacts'];
+  if (many !== undefined) {
+    if (!Array.isArray(many)) throw new WorkflowDefinitionError(`${where}.artifacts must be a list`);
+    for (const item of many) {
+      if (typeof item !== 'string' || !item) {
+        throw new WorkflowDefinitionError(`${where}.artifacts entries must be non-empty strings`);
+      }
+      if (!out.includes(item)) out.push(item);
+    }
+  }
+  return out.length ? out : undefined;
+}
+
 export function parseWorkflow(source: string, origin: string): WorkflowDefinition {
   const raw = parseYaml(source) as Record<string, unknown> | null;
   if (!raw || typeof raw !== 'object') {
@@ -43,7 +64,7 @@ export function parseWorkflow(source: string, origin: string): WorkflowDefinitio
       gate: o['gate'] as string | undefined,
       skill: o['skill'] as string | undefined,
       agent: o['agent'] as string | undefined,
-      artifact: o['artifact'] as string | undefined,
+      artifacts: parseArtifacts(o, `${origin}: nodes[${i}]`),
     };
   });
 

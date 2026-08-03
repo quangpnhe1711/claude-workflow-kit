@@ -33,4 +33,8 @@ Never mark PASS because code "looks correct".
 
 Persist concise commands/results/evidence to
 `.ai-workflow/runs/<runId>/validation.md` and record it with
-`cw artifact validation.md`.
+`cw artifact validation.md`. The independent reviewer reads this file directly,
+so record the actual commands and their actual output, not a claim of success.
+
+Return the result to the calling workflow. Raise to the user only a failure that
+blocks trustworthy completion.

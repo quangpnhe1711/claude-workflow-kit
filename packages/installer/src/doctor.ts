@@ -5,8 +5,12 @@ import {
   DEFAULT_CONFIG,
   WorkflowRuntime,
   derivedRunStatus,
+  derivedSemanticStatus,
   loadWorkflows,
+  readRuntimePointer,
+  resolveRuntimeDirName,
   type KitConfig,
+  type RunState,
 } from '@claude-workflow-kit/workflow-core';
 import { isKitHookCommand, readJsonFile, type SettingsLike } from './merge.js';
 import { loadPreset } from './paths.js';
@@ -40,8 +44,21 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
   );
 
   // --- runtime dir + config ---
-  const runtimeDirName = options.runtimeDir ?? DEFAULT_CONFIG.runtimeDir;
+  // Honour the same pointer the hook reads, so `--runtime <dir>` installs are
+  // diagnosed as installed rather than as missing.
+  const runtimeDirName = resolveRuntimeDirName(projectRoot, options.runtimeDir);
   const runtimeDir = join(projectRoot, runtimeDirName);
+  if (runtimeDirName !== DEFAULT_CONFIG.runtimeDir) {
+    const pointer = readRuntimePointer(projectRoot);
+    add(
+      'runtime pointer',
+      pointer === runtimeDirName ? 'ok' : 'fail',
+      pointer === runtimeDirName
+        ? `.claude/cw-runtime -> ${pointer}`
+        : `runtime dir is "${runtimeDirName}" but .claude/cw-runtime says "${pointer ?? '(missing)'}" — ` +
+          `hooks would look in the wrong place. Run: claude-workflow-kit update --runtime ${runtimeDirName}`,
+    );
+  }
   const config = readJsonFile<KitConfig>(join(runtimeDir, 'config.json'));
   if (!existsSync(runtimeDir)) {
     add('runtime directory', 'fail', `${runtimeDir} missing — run: claude-workflow-kit init`);
@@ -144,15 +161,74 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
   try {
     const runtime = new WorkflowRuntime({ projectRoot, runtimeDir: runtimeDirName });
     const ids = runtime.runIds();
-    const stalled = ids
-      .map((id) => runtime.run(id))
-      .filter((r) => derivedRunStatus(r, runtime.config.stallThresholdSeconds) === 'POSSIBLY_STALLED');
+    const loaded: RunState[] = [];
+    const unreadable: string[] = [];
+    for (const id of ids) {
+      try {
+        loaded.push(runtime.run(id));
+      } catch {
+        unreadable.push(id);
+      }
+    }
+    const stalled = loaded.filter(
+      (r) => derivedRunStatus(r, runtime.config.stallThresholdSeconds) === 'POSSIBLY_STALLED',
+    );
+    const quarantined = runtime.quarantinedRunIds();
+    const broken = unreadable.filter((id) => !quarantined.includes(id));
+    const notes: string[] = [`${ids.length} runs`];
+    if (stalled.length) notes.push(`${stalled.length} possibly stalled: ${stalled.map((r) => r.runId).join(', ')}`);
+    if (broken.length) {
+      notes.push(
+        `${broken.length} CORRUPT: ${broken.join(', ')} ` +
+          `(retire with: cw run quarantine-current --reason "corrupt state")`,
+      );
+    }
+    if (quarantined.length) notes.push(`${quarantined.length} quarantined: ${quarantined.join(', ')}`);
+    add('runs', broken.length ? 'fail' : stalled.length ? 'warn' : 'ok', notes.join('; '));
+
+    // HOOK-01: a policy that failed open must not look like a policy that allowed.
+    const health = runtime.policyHealth();
+    if (!health) {
+      add(
+        'gate policy',
+        'warn',
+        'no PreToolUse evaluation recorded yet — enforcement is unproven in this project',
+      );
+    } else {
+      add(
+        'gate policy',
+        health.status === 'DEGRADED' ? 'fail' : health.status === 'DISABLED' ? 'warn' : 'ok',
+        health.status === 'OK'
+          ? `OK, enforceGates=${health.enforceGates}, last evaluated ${health.lastOkAt}`
+          : health.status === 'DISABLED'
+            ? 'enforceGates=false in config.json: gates are advisory in this project'
+            : `DEGRADED — the hook failed and is failing open (${health.errorCount} error(s), last ` +
+              `${health.lastErrorAt}): ${health.lastError?.split('\n')[0] ?? 'unknown'}`,
+      );
+    }
+
+    // The failure mode of a model-emitted state machine: Claude is working but
+    // the diagram is frozen. Reported, never guessed away.
+    const lagging = loaded.filter(
+      (r) => derivedSemanticStatus(r, runtime.config.semanticLagThresholdSeconds) === 'SEMANTIC_LAG',
+    );
     add(
-      'runs',
-      stalled.length ? 'warn' : 'ok',
-      stalled.length
-        ? `${ids.length} runs, ${stalled.length} possibly stalled: ${stalled.map((r) => r.runId).join(', ')}`
-        : `${ids.length} runs`,
+      'semantic progress',
+      lagging.length ? 'warn' : 'ok',
+      lagging.length
+        ? `${lagging.length} run(s) active with no phase transition for >${runtime.config.semanticLagThresholdSeconds}s: ` +
+          lagging.map((r) => `${r.runId}@${r.currentNode}`).join(', ')
+        : 'phases track runtime activity',
+    );
+
+    // --- convention cache ---
+    const conventions = runtime.conventions();
+    add(
+      'conventions',
+      conventions.refreshNeeded.length ? 'warn' : 'ok',
+      conventions.refreshNeeded.length
+        ? `refresh needed: ${conventions.refreshNeeded.join(', ')} (cw conventions status)`
+        : `${conventions.areas.length} areas cached and verified`,
     );
   } catch (error) {
     add('runs', 'warn', (error as Error).message);

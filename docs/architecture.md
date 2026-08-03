@@ -108,21 +108,62 @@ Computed from `lastActivityAt` vs threshold at read time. A stalled run is never
 **D9 — One run per workflow command, not per message.**
 `.ai-workflow/current-run` holds the active run id. A follow-up prompt during `WAITING_USER` continues the same run. An unrelated prompt with no active run may open a `generic` run (configurable, default on).
 
-**D10 — Caveman is optional.**
-Preset rule: use `caveman:caveman-compress` if present, otherwise the built-in compact-output policy. Workflow correctness never depends on it.
+**D10 — The output policy is built in, and brevity is a property of the wording only.**
+The managed `CLAUDE.md` block carries the compact-output rule; it depends on no external compression plugin. Depth is budgeted per step, not globally: execution narration is suppressed, while the steps that decide something — evidence reconciliation, business decision, readiness, implementation, review, and the final report — run at high reasoning effort. `wf-final-report` in particular is short *and* high-effort: choosing which risks and limitations are load-bearing is the hardest judgement in the run, and a report made brief by thinking less is how a known limitation goes unmentioned.
 
 **D11 — Installer merges, never overwrites.**
 `CLAUDE.md` gets a `<!-- CW:START -->…<!-- CW:END -->` managed block. `.claude/settings.json` hooks are merged by matcher; unrelated user settings are untouched. Modified files are backed up as `*.cw-backup`.
 
-**D12 — Strict transition validation, escapable.**
-`cw phase enter X` rejects a transition with no matching edge, or with an unpassed gate. `CW_STRICT=0` downgrades to a warning so a broken workflow definition can never hard-block real engineering work.
+**D12 — `CW_STRICT` governs graph transitions and nothing else.**
+`cw phase enter X` rejects a transition with no matching edge, or with an unpassed gate. `CW_STRICT=0` (or an explicit `--force`) downgrades *that* to a forced transition, recorded as `FORCED_TRANSITION`, so a broken workflow definition can never hard-block real engineering work. It deliberately does not reach anything else: it never passes a gate, never skips artifact validation, never bypasses ownership and never completes a run. An earlier version derived `force` for *every* command from `CW_STRICT`, which meant one environment variable silently switched gate validation off.
+
+**D13 — Mutation authorisation has two categories, and command execution is one of them.**
+Refusing `cw phase enter implementation` is bookkeeping; it does not stop an `Edit`. The `PreToolUse` hook therefore answers a different question: may this call change anything right now?
+
+- *Repository mutation* — file-writing tools (`mutationTools`, plus `mutationToolPatterns` for MCP writers whose names are server-defined) and command tools (`commandTools`). Denied while any gate is unpassed.
+- *Workflow artifact writes* — a write that resolves to exactly `<activeRunDir>/<name>` where `<name>` is declared by the *current* phase and is not machine-owned. Allowed behind the gate: the phase that produces a gate's evidence cannot be blocked by that gate.
+
+Command execution is the part that decides whether "hard gate" is true at all: a shell writes any file in one line. Behind an open gate a command must pass `evaluateCommand` — every segment's program on a read-only allowlist, no redirection, no command substitution, no pipes into writers, no interpreters, and no write-capable flags on otherwise-read-only tools (`find -delete`, `fd -x`, `sort -o`). `awk` and `env` are off the allowlist because both launch arbitrary programs while reading as text utilities. The one deliberate soft edge is `allowTestCommandsBehindGate` (default on): package scripts and build targets run, and they *can* write generated files. `false` makes the gate strictly read-only.
+
+Any failure inside the hook still degrades to *allow* — a broken kit must not stop the user working — which is exactly why D19 records that it happened.
+
+**D14 — A gate needs evidence that is actually evidence.**
+`cw gate pass G` requires the run to have *entered* the phase that owns `G`, and that phase's declared artifact to be a regular, non-empty file inside the run directory. A directory named `business-decision.md` and a zero-byte file both used to satisfy "is the name in the listing". There is no `--force`; `cw gate override G --reason "…"` is a separate command that demands a reason and writes a `GATE_OVERRIDE` event plus permanent provenance on the gate.
+
+Waiting is walked into, not teleported to: `cw gate wait G` is refused unless the run is standing on `G`'s owning phase, that phase has been entered, and an open edge to the waiting node exists. `gateProvenance` records `decidedAtNode`, `ownerVisit`, timestamps and the waiting node, so `gate pass` from a waiting node can check the run legitimately waited there.
+
+**D15 — Authorisation is repository-scoped; ownership is session-scoped.**
+These are different questions and were once answered by the same lookup. Mutation policy inspects *every* active run in the worktree: while any of them has an open gate, no session may change the repository. Session ownership (`sessions.json` + `ownerSessionId`) governs telemetry — a hook from session B must not overwrite session A's runtime state — and semantic commands: the policy denies `cw phase/gate/run …` issued by a session that does not own the target run, and recovery is explicit (`cw run claim`, `cw run transfer`). Because `cw` runs over a shell and usually carries no session identity, that check is enforceable at the hook (which knows the session) and advisory in the CLI (which only checks when `--session`/`CW_SESSION`/`CLAUDE_SESSION_ID` is present).
+
+Retiring a run whose gate is still open is the one legitimate way past that gate, so it cannot be a bare command: `cw run abandon` and `cw run start --force` both require a stated reason and record the unpassed gates in the event log.
+
+**D16 — Terminal states are verified, and a failed run has no live node.**
+`cw run complete` checks that every gate passed, every phase completed or was skipped, nothing is still waiting on the user, the run is at the workflow's end, and every required artifact is present. There is no `--force`: a run that cannot finish is retired with `cw run abandon`, and `ABANDONED` never reads as success. Conversely, `run fail` / `gate fail` / `phase fail` settle *every* live node, because a node left `ACTIVE` or `WAITING_USER` under a `FAILED` header is a diagram contradicting its own header.
+
+**D17 — Semantic lag is reported, not inferred away — and only when it means something.**
+`lastSemanticAt` and `lastRuntimeAt` are tracked separately. Runtime fresh + semantic stale = `SEMANTIC_LAG` in the monitor, `cw status` and `doctor`. It is only reported while the runtime is genuinely working (`ACTIVE`, `TOOL_RUNNING`, `SUBAGENT_RUNNING`): an `IDLE`, `STOPPED`, `FAILED` or `UNKNOWN` session is not "working without reporting", and calling that lag was noise that trained the user to ignore the badge.
+
+**D18 — Corrupt is not empty, and validation lives at the storage boundary.**
+`RunStateCorruptError` is distinct from `RunNotFoundError`, and *structural* validation runs in `readRun`, so parseable JSON with an invented status or a missing `nodes` map is corrupt too — every consumer downstream would otherwise read it as a working run. `cw status` exits 2, `run list` exits 1, `doctor` fails, the monitor lists it under `unreadableRuns`, and `cw run start` refuses while the current run is unreadable. Retirement is explicit and never deserialises the broken state: `cw run quarantine-current --reason "…"` preserves the corrupt files, drops a `QUARANTINED` marker, clears the pointer and appends to `quarantine.jsonl`.
+
+**D19 — A policy that failed open must not look like a policy that allowed.**
+The hook fails open by design, and Claude Code reads "no output" as "no opinion" — indistinguishable from an allow. So every `PreToolUse` evaluation writes `policy-health.json`: `OK`, `DISABLED` (`enforceGates: false`) or `DEGRADED` (the hook threw). `doctor` reports `DEGRADED` as a failure, `cw status` and `cw policy` print it, and the monitor shows a badge.
+
+**D20 — The monitor's live path is a fact, not an inference.**
+`transitions` records the edges actually traversed. The diagram animates only the last one, and nothing at all once the run is terminal. Deriving "active path" from "predecessor completed and target is current" lit every edge of a review loop simultaneously and kept animating after the run ended. Time-derived values (`derivedStatus`, `derivedSemantic`) are part of the change signature, because they flip with no new event and the browser has to hear about it.
+
+**D21 — A non-default runtime directory is discoverable without flags.**
+`--runtime <dir>` is chosen at install time, but the hook, `cw` from a skill, `doctor` and the monitor all start with no flags. The installer records the name in `.claude/cw-runtime`; everything resolves through `resolveRuntimeDirName()`. Previously a custom runtime directory left the hook looking in `.ai-workflow/`, finding no config, and silently enforcing nothing.
 
 ## 4. Risks
 
 | # | Risk | Mitigation |
 | --- | --- | --- |
-| R1 | Claude forgets to emit `cw phase …`, so the diagram lags reality. | Every phase skill starts and ends with its own `cw` command; `cw doctor` reports runs whose semantic state is older than their runtime activity. |
-| R2 | Hooks break the user's Claude Code session. | Hook script catches everything and always exits 0; failures go to `.ai-workflow/hook-errors.log`. |
+| R1 | Claude forgets to emit `cw phase …`, so the diagram lags reality. | Every phase skill starts and ends with its own `cw` command; `lastSemanticAt` vs `lastRuntimeAt` yields `SEMANTIC_LAG`, surfaced by `cw status`, `claude-workflow-kit doctor` and the monitor (D16). |
+| R2 | Hooks break the user's Claude Code session. | Hook script catches everything and always exits 0; failures go to `.ai-workflow/hook-errors.log` **and** to `policy-health.json` as `DEGRADED`, so failing open is visible rather than indistinguishable from allowing (D19). |
+| R8 | A test or build command allowed behind an open gate writes files anyway (package script, Makefile target, updated snapshot). | Accepted and documented: `allowTestCommandsBehindGate` (default on) is the one soft edge of the gate; set it to `false` for a strictly read-only gate. |
+| R9 | A command tool that is not in `commandTools` (a new MCP shell, a future built-in) executes commands unchecked. | The list is config, and `doctor` reports policy health; a tool outside both `commandTools` and `mutationTools`/`mutationToolPatterns` is not covered, and the README says so instead of implying total coverage. |
+| R10 | `cw` invoked outside Claude Code carries no session identity, so semantic ownership is unenforced there. | Enforced at the hook, which knows the session; the CLI checks when an identity is available. Documented as such rather than claimed as a hard boundary. |
 | R3 | `cw` not on PATH in the target project. | `init` records an absolute `runtimeUrl` in `.ai-workflow/config.json`; the hook imports that directly and never relies on PATH. |
 | R4 | Installer damages an existing `CLAUDE.md` / `settings.json`. | Marker block + structural merge + backup + `uninstall` that removes only managed content. |
 | R5 | Concurrent writers corrupt `state.json`. | Write temp file + `rename` (atomic on same volume). Events are append-only. |

@@ -26,6 +26,14 @@ export function Header({ snapshot, run, connection, nowMs }: Props) {
             <span className={`pill pill--${run.derivedStatus.toLowerCase()}`}>
               {run.derivedStatus.replace('_', ' ')}
             </span>
+            {run.derivedSemantic === 'SEMANTIC_LAG' && (
+              <span
+                className="pill pill--semantic_lag"
+                title="Claude is active but the workflow has not reported a phase transition. The diagram is behind the work."
+              >
+                semantic lag
+              </span>
+            )}
             <span className="header__stat">
               <span className={`dot claude-${run.runtime.claude.toLowerCase()}`} />
               claude {run.runtime.claude.replace('_', ' ').toLowerCase()}
@@ -34,6 +42,18 @@ export function Header({ snapshot, run, connection, nowMs }: Props) {
             <span className="header__stat dim">{ago(run.runtime.lastEventAt ?? run.lastActivityAt, nowMs)}</span>
             <span className="header__stat dim">elapsed {elapsed(run.startedAt, run.finishedAt, nowMs)}</span>
           </>
+        )}
+        {snapshot.policyHealth && snapshot.policyHealth.status !== 'OK' && (
+          <span
+            className={`pill pill--policy_${snapshot.policyHealth.status.toLowerCase()}`}
+            title={
+              snapshot.policyHealth.status === 'DEGRADED'
+                ? `The PreToolUse gate policy failed and is failing open: ${snapshot.policyHealth.lastError ?? ''}`
+                : 'Gate enforcement is switched off in config.json (enforceGates=false).'
+            }
+          >
+            policy {snapshot.policyHealth.status.toLowerCase()}
+          </span>
         )}
         <span className={`conn conn--${connection}`}>{connection}</span>
       </div>

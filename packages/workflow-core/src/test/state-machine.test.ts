@@ -67,6 +67,15 @@ test('gate wait parks the run on the waiting node and pass releases it', () => {
   assert.equal(run.currentNode, 'readiness');
 });
 
+test('re-entering the current phase is a retry, not another visit', () => {
+  const run = fresh();
+  enterNode(def, run, 'evidence', T0);
+  enterNode(def, run, 'evidence', T0);
+  enterNode(def, run, 'evidence', T0);
+  assert.equal(run.nodes['evidence']?.visits, 1, 'a duplicate emit must not inflate the loop count');
+  assert.equal(run.nodes['evidence']?.status, 'ACTIVE');
+});
+
 test('a review loop can re-enter implementation', () => {
   const run = fresh();
   for (const node of ['evidence', 'business']) enterNode(def, run, node, T0);

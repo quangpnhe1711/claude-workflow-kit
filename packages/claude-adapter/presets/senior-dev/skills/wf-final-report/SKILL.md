@@ -2,7 +2,7 @@
 name: wf-final-report
 description: Internal final reporting step that produces a compact evidence-focused completion report without narrating routine work.
 user-invocable: false
-effort: low
+effort: high
 ---
 
 Produce only:
@@ -36,5 +36,12 @@ Do not include:
 Persist to `.ai-workflow/runs/<runId>/final-report.md` and record it with
 `cw artifact final-report.md`.
 
-If `caveman:caveman-compress` is available, use it for the user-facing version
-of this report. Otherwise keep the compact format above unchanged.
+This is the one step that speaks to the user at length. Compress wording, never
+substance: every real finding, risk and limitation stays in. Do not delegate
+this to an external compression skill.
+
+Brevity here is a property of the *wording*, not of the thinking. This step runs
+at high reasoning effort on purpose: deciding which risks are real, which
+limitations matter and which findings are load-bearing is the hardest judgement
+in the run. A short report produced by thinking less is how a known limitation
+goes unmentioned. Think hard, then write tersely.

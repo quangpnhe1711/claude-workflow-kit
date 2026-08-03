@@ -1,40 +1,40 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs SessionStart" }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" SessionStart" }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs SessionEnd" }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" SessionEnd" }] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs UserPromptSubmit" }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" UserPromptSubmit" }] }
     ],
     "PreToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs PreToolUse" }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" PreToolUse" }] }
     ],
     "PostToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs PostToolUse" }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" PostToolUse" }] }
     ],
     "PostToolUseFailure": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs PostToolUseFailure" }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" PostToolUseFailure" }] }
     ],
     "SubagentStart": [
-      { "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs SubagentStart" }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" SubagentStart" }] }
     ],
     "SubagentStop": [
-      { "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs SubagentStop" }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" SubagentStop" }] }
     ],
     "TaskCreated": [
-      { "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs TaskCreated" }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" TaskCreated" }] }
     ],
     "TaskCompleted": [
-      { "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs TaskCompleted" }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" TaskCompleted" }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs Stop" }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" Stop" }] }
     ],
     "StopFailure": [
-      { "hooks": [{ "type": "command", "command": "node .claude/hooks/cw-hook.mjs StopFailure" }] }
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/cw-hook.mjs\" StopFailure" }] }
     ]
   }
 }

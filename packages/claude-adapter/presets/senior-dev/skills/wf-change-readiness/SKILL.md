@@ -56,6 +56,21 @@ Derive tests from business rules before implementation:
 - migration/data;
 - E2E scenarios.
 
-Persist to `.ai-workflow/runs/<runId>/implementation-plan.md`,
-`impact-risk-scope.md` and `test-strategy.md`, then record each with
-`cw artifact <filename>`.
+## Artifact contract
+
+This phase owns three files and the workflow definition declares all three:
+
+| File | Content |
+| --- | --- |
+| `implementation-plan.md` | the plan section above |
+| `impact-risk-scope.md` | impact analysis, risk analysis, scope |
+| `test-strategy.md` | the test strategy |
+
+Persist all three to `.ai-workflow/runs/<runId>/`, then record each with
+`cw artifact <filename>`. The runtime enforces this: `cw phase complete` and the
+next `cw phase enter` are both refused while one of the three is missing or
+empty, so implementation cannot begin without them. Write the files — do not
+reach for `--allow-missing-artifacts`, which is an audited exception for the case
+where the artifact genuinely does not apply.
+
+Return the package to the calling workflow. Do not write it out to the user.

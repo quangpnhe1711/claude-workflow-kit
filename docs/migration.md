@@ -74,20 +74,30 @@ Watch the diagram: phases should advance as the work advances, the gate should
 turn amber when Claude asks a business question, and the active node should
 show the live tool.
 
-If the diagram lags the conversation, the skill is not emitting `cw` — that is
-the failure mode to look for, and it does not affect the engineering work
-itself.
+Two things to check deliberately on the first run:
+
+- Ask Claude to edit a file before the business decision is resolved. The
+  `PreToolUse` hook must refuse it, naming `BUSINESS_READY`. If the edit goes
+  through, `enforceGates` is off or the hooks are not wired — run `doctor`.
+- If the diagram lags the conversation, the skill is not emitting `cw`. The run
+  is flagged `semantic lag` in the monitor and by `doctor`; the engineering work
+  itself is unaffected.
 
 ## 7. Decide what to commit
 
 ```
 .ai-workflow/conventions/    commit — shared repository knowledge
 .ai-workflow/runs/           gitignored by default (a .gitignore is installed)
-.ai-workflow/config.json     commit — port and thresholds are team settings
+.ai-workflow/config.json     gitignored — it holds an absolute runtimeUrl for
+                             this machine; re-created by `init` on each clone
+.ai-workflow/sessions.json   gitignored — machine-local session correlation
 .claude/                     commit
 CLAUDE.md                    commit
 *.cw-backup                  delete once satisfied
 ```
+
+The installer writes `.ai-workflow/.gitignore` covering the machine-local files,
+so this is the default without any action.
 
 ## 8. Updating later
 

@@ -1,4 +1,4 @@
-import type { EventType, WorkflowEvent } from './types.js';
+import type { EventType, MutationDecision, WorkflowEvent } from './types.js';
 import type { WorkflowRuntime } from './runtime.js';
 
 /**
@@ -16,6 +16,7 @@ export interface ClaudeHookPayload {
   task_id?: string;
   description?: string;
   error?: string;
+  tool_input?: Record<string, unknown>;
   tool_response?: { success?: boolean; error?: unknown } | unknown;
   [key: string]: unknown;
 }
@@ -61,16 +62,47 @@ export function hookPayloadToEvent(payload: ClaudeHookPayload): Partial<Workflow
   return out;
 }
 
+export interface HookResult {
+  runId?: string;
+  /** Present for PreToolUse. `allow` means "say nothing", never a forced allow. */
+  mutation?: MutationDecision;
+}
+
 /**
  * Apply one Claude Code hook payload. Hooks must never break a session, so the
  * caller is expected to swallow errors and exit 0 regardless.
  */
-export function applyHook(runtime: WorkflowRuntime, payload: ClaudeHookPayload): string | undefined {
+export function applyHook(runtime: WorkflowRuntime, payload: ClaudeHookPayload): HookResult {
   const type = hookEventType(payload.hook_event_name);
-  if (!type) return undefined;
+  if (!type) return {};
   const data = hookPayloadToEvent(payload) ?? {};
-  // Only a prompt may open a generic run; a stray tool call must not.
-  const autoStart = type === 'PROMPT_SUBMIT' || type === 'SESSION_START';
+
+  // Gate check happens before recording: a denied call never runs, so it must
+  // not be reported as a tool that started.
+  let mutation: MutationDecision | undefined;
+  if (type === 'TOOL_START') {
+    // The policy either ran or it did not, and "did not" is invisible to Claude
+    // Code — a crashed hook reads exactly like an allow. Record which happened.
+    try {
+      mutation = runtime.checkMutation({
+        toolName: payload.tool_name,
+        toolInput: payload.tool_input,
+        sessionId: payload.session_id,
+      });
+      runtime.recordPolicyEvaluation(true);
+    } catch (error) {
+      runtime.recordPolicyEvaluation(false, error);
+      throw error;
+    }
+    if (mutation.decision === 'deny') return { mutation, ...(mutation.runId ? { runId: mutation.runId } : {}) };
+  }
+
+  // Only a prompt may open a generic run. A session merely starting must not:
+  // that is what left one dead RUNNING run behind per Claude session.
+  const autoStart = type === 'PROMPT_SUBMIT';
   const run = runtime.recordRuntimeEvent(type, data, { autoStart });
-  return run?.runId;
+  const result: HookResult = {};
+  if (run) result.runId = run.runId;
+  if (mutation) result.mutation = mutation;
+  return result;
 }

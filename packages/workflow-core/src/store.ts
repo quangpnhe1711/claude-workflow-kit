@@ -10,9 +10,31 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { DEFAULT_CONFIG, type KitConfig, type RunState, type WorkflowEvent } from './types.js';
+import {
+  DEFAULT_CONFIG,
+  type InvalidArtifact,
+  type KitConfig,
+  type PolicyHealth,
+  type RunState,
+  type WorkflowEvent,
+} from './types.js';
 
 export class RunNotFoundError extends Error {}
+
+/**
+ * `state.json` exists but cannot be read as a run. Kept distinct from
+ * RunNotFoundError: "no run" and "broken run" need opposite recoveries, and
+ * reporting the second as the first is what makes a workflow silently fork.
+ */
+export class RunStateCorruptError extends Error {
+  readonly runId: string;
+  readonly file: string;
+  constructor(runId: string, file: string, cause: unknown) {
+    super(`run "${runId}" state is corrupt at ${file}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.runId = runId;
+    this.file = file;
+  }
+}
 
 /** Filesystem layout of the project-local runtime directory. */
 export class RuntimePaths {
@@ -36,11 +58,23 @@ export class RuntimePaths {
   get currentRunFile() {
     return join(this.runtimeDir, 'current-run');
   }
+  get sessionsFile() {
+    return join(this.runtimeDir, 'sessions.json');
+  }
   get hookErrorLog() {
     return join(this.runtimeDir, 'hook-errors.log');
   }
+  get policyHealthFile() {
+    return join(this.runtimeDir, 'policy-health.json');
+  }
+  get quarantineLog() {
+    return join(this.runtimeDir, 'quarantine.jsonl');
+  }
   runDir(runId: string) {
     return join(this.runsDir, runId);
+  }
+  quarantineMarker(runId: string) {
+    return join(this.runDir(runId), 'QUARANTINED');
   }
   stateFile(runId: string) {
     return join(this.runDir(runId), 'state.json');
@@ -60,6 +94,9 @@ export function findProjectRoot(start = process.cwd(), runtimeDir = DEFAULT_CONF
   let fallback: string | undefined;
   for (;;) {
     if (existsSync(join(dir, runtimeDir))) return dir;
+    // A project installed with `--runtime <dir>` records the name it chose.
+    const pointed = readRuntimePointer(dir);
+    if (pointed && existsSync(join(dir, pointed))) return dir;
     if (!fallback && markers.some((m) => existsSync(join(dir, m)))) fallback = dir;
     const parent = resolve(dir, '..');
     if (parent === dir) break;
@@ -97,16 +134,109 @@ export function listRunIds(paths: RuntimePaths): string[] {
     .sort();
 }
 
+/** Backfill fields added after a run was first written. */
+function normaliseRun(run: RunState): RunState {
+  if (!run.lastSemanticAt) run.lastSemanticAt = run.updatedAt ?? run.startedAt;
+  if (!Array.isArray(run.artifacts)) run.artifacts = [];
+  return run;
+}
+
+const RUN_STATUSES = ['RUNNING', 'WAITING_USER', 'COMPLETED', 'FAILED', 'ABANDONED'];
+const NODE_STATUSES = ['PENDING', 'ACTIVE', 'WAITING_USER', 'COMPLETED', 'FAILED', 'SKIPPED'];
+const GATE_STATUSES = ['OPEN', 'WAITING', 'PASSED', 'FAILED'];
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * Parseable JSON is not a run. A state file with a missing `nodes` map or an
+ * invented status is corrupt in exactly the way that matters — every consumer
+ * downstream would read it as a working run and quietly do the wrong thing — so
+ * the check lives at the storage boundary where nothing can skip it.
+ */
+export function validateRunState(parsed: unknown): string | undefined {
+  if (!isPlainObject(parsed)) return 'not an object';
+  for (const key of ['runId', 'workflow', 'status', 'currentNode', 'startedAt'] as const) {
+    if (typeof parsed[key] !== 'string' || !(parsed[key] as string).length) {
+      return `"${key}" must be a non-empty string`;
+    }
+  }
+  if (!RUN_STATUSES.includes(parsed['status'] as string)) return `unknown run status "${String(parsed['status'])}"`;
+  if (!isPlainObject(parsed['nodes'])) return '"nodes" must be an object';
+  for (const [id, state] of Object.entries(parsed['nodes'] as Record<string, unknown>)) {
+    if (!isPlainObject(state)) return `node "${id}" is not an object`;
+    if (!NODE_STATUSES.includes(state['status'] as string)) {
+      return `node "${id}" has unknown status "${String(state['status'])}"`;
+    }
+    if (typeof state['visits'] !== 'number' || !Number.isFinite(state['visits'])) {
+      return `node "${id}" has a non-numeric visits count`;
+    }
+  }
+  if (!isPlainObject(parsed['gates'])) return '"gates" must be an object';
+  for (const [gate, status] of Object.entries(parsed['gates'] as Record<string, unknown>)) {
+    if (!GATE_STATUSES.includes(status as string)) {
+      return `gate "${gate}" has unknown status "${String(status)}"`;
+    }
+  }
+  if (!isPlainObject(parsed['runtime'])) return '"runtime" must be an object';
+  if (typeof (parsed['runtime'] as Record<string, unknown>)['claude'] !== 'string') {
+    return '"runtime.claude" must be a string';
+  }
+  if (!isPlainObject(parsed['agents'])) return '"agents" must be an object';
+  if (!(parsed['nodes'] as Record<string, unknown>)[parsed['currentNode'] as string]) {
+    return `currentNode "${String(parsed['currentNode'])}" has no entry in "nodes"`;
+  }
+  return undefined;
+}
+
 export function readRun(paths: RuntimePaths, runId: string): RunState {
   const file = paths.stateFile(runId);
   if (!existsSync(file)) throw new RunNotFoundError(`run "${runId}" not found at ${file}`);
-  return JSON.parse(readFileSync(file, 'utf8')) as RunState;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new RunStateCorruptError(runId, file, error);
+  }
+  const invalid = validateRunState(parsed);
+  if (invalid) throw new RunStateCorruptError(runId, file, new Error(invalid));
+  return normaliseRun(parsed as RunState);
 }
 
+/** A run explicitly retired by `cw run quarantine-current`. */
+export function isQuarantined(paths: RuntimePaths, runId: string): boolean {
+  return existsSync(paths.quarantineMarker(runId));
+}
+
+/**
+ * Retire an unreadable run without ever deserialising it. The corrupt files stay
+ * exactly where they are — they are the only evidence of what happened — and the
+ * audit record goes somewhere that is guaranteed writable.
+ */
+export function quarantineRun(paths: RuntimePaths, runId: string, reason: string): { marker: string } {
+  const dir = paths.runDir(runId);
+  if (!existsSync(dir)) throw new RunNotFoundError(`run "${runId}" not found at ${dir}`);
+  const at = new Date().toISOString();
+  writeFileSync(paths.quarantineMarker(runId), `${at} ${reason}\n`, 'utf8');
+  mkdirSync(paths.runtimeDir, { recursive: true });
+  appendFileSync(
+    paths.quarantineLog,
+    `${JSON.stringify({ ts: at, runId, reason, stateFile: paths.stateFile(runId) })}\n`,
+    'utf8',
+  );
+  return { marker: paths.quarantineMarker(runId) };
+}
+
+/**
+ * Missing run -> undefined. A corrupt run still throws: the caller has to
+ * decide, and silently treating it as "no run" loses the run.
+ */
 export function tryReadRun(paths: RuntimePaths, runId: string): RunState | undefined {
   try {
     return readRun(paths, runId);
-  } catch {
+  } catch (error) {
+    if (error instanceof RunStateCorruptError) throw error;
     return undefined;
   }
 }
@@ -152,13 +282,169 @@ export function writeCurrentRunId(paths: RuntimePaths, runId: string | undefined
   writeFileSync(paths.currentRunFile, `${runId}\n`, 'utf8');
 }
 
-/** Artifacts present in a run directory, excluding the machine-owned files. */
-export function listArtifacts(paths: RuntimePaths, runId: string): string[] {
+/**
+ * sessionId -> runId. The global `current-run` pointer stays (the CLI has no
+ * session context), but a hook resolves its own session first, so two Claude
+ * sessions in one repo cannot write to each other's run.
+ */
+export type SessionMap = Record<string, { runId: string; updatedAt: string }>;
+
+export function readSessions(paths: RuntimePaths): SessionMap {
+  if (!existsSync(paths.sessionsFile)) return {};
+  try {
+    const raw = JSON.parse(readFileSync(paths.sessionsFile, 'utf8')) as SessionMap;
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    // A broken session index only costs correlation, never the run itself.
+    return {};
+  }
+}
+
+export function writeSessions(paths: RuntimePaths, sessions: SessionMap): void {
+  mkdirSync(paths.runtimeDir, { recursive: true });
+  writeJsonAtomic(paths.sessionsFile, sessions);
+}
+
+const MACHINE_OWNED = ['state.json', 'events.jsonl', 'QUARANTINED'];
+
+export interface ArtifactScan {
+  /** Regular, non-empty files: the only ones that count as evidence. */
+  valid: string[];
+  /** Entries that exist but cannot serve as evidence, with the reason. */
+  invalid: InvalidArtifact[];
+}
+
+/**
+ * Evidence has to be a readable file with something in it. A directory named
+ * `business-decision.md` and a zero-byte file both satisfied the old
+ * "is the name in the listing" test, which is how a gate could be passed with no
+ * evidence behind it at all.
+ */
+export function scanArtifacts(paths: RuntimePaths, runId: string): ArtifactScan {
   const dir = paths.runDir(runId);
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((f) => f !== 'state.json' && f !== 'events.jsonl' && !f.endsWith('.tmp'))
-    .sort();
+  const scan: ArtifactScan = { valid: [], invalid: [] };
+  if (!existsSync(dir)) return scan;
+  for (const name of readdirSync(dir).sort()) {
+    if (MACHINE_OWNED.includes(name) || name.endsWith('.tmp')) continue;
+    let stat;
+    try {
+      stat = statSync(join(dir, name));
+    } catch (error) {
+      scan.invalid.push({ name, reason: `unreadable: ${(error as Error).message}` });
+      continue;
+    }
+    if (stat.isDirectory()) {
+      scan.invalid.push({ name, reason: 'is a directory, not an evidence file' });
+      continue;
+    }
+    if (!stat.isFile()) {
+      scan.invalid.push({ name, reason: 'is not a regular file' });
+      continue;
+    }
+    if (stat.size === 0) {
+      scan.invalid.push({ name, reason: 'is empty' });
+      continue;
+    }
+    let content = '';
+    try {
+      content = readFileSync(join(dir, name), 'utf8');
+    } catch (error) {
+      scan.invalid.push({ name, reason: `unreadable: ${(error as Error).message}` });
+      continue;
+    }
+    if (!content.trim().length) {
+      scan.invalid.push({ name, reason: 'contains only whitespace' });
+      continue;
+    }
+    scan.valid.push(name);
+  }
+  return scan;
+}
+
+/** Artifacts in a run directory that satisfy the evidence contract. */
+export function listArtifacts(paths: RuntimePaths, runId: string): string[] {
+  return scanArtifacts(paths, runId).valid;
+}
+
+// ---- policy health ---------------------------------------------------------
+
+/**
+ * A PreToolUse hook that crashes exits 0 with no output, which Claude Code reads
+ * as "no opinion" — indistinguishable from an allow. That is the correct failure
+ * mode (a broken kit must not block work) and precisely why the failure has to be
+ * recorded somewhere the user can see it.
+ */
+export function readPolicyHealth(paths: RuntimePaths): PolicyHealth | undefined {
+  if (!existsSync(paths.policyHealthFile)) return undefined;
+  try {
+    const raw = JSON.parse(readFileSync(paths.policyHealthFile, 'utf8')) as PolicyHealth;
+    return raw && typeof raw === 'object' && typeof raw.status === 'string' ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function recordPolicyHealth(
+  paths: RuntimePaths,
+  update: { ok: boolean; enforceGates: boolean; error?: string; now?: string },
+): PolicyHealth {
+  const previous = readPolicyHealth(paths);
+  const now = update.now ?? new Date().toISOString();
+  const health: PolicyHealth = {
+    status: update.ok ? (update.enforceGates ? 'OK' : 'DISABLED') : 'DEGRADED',
+    enforceGates: update.enforceGates,
+    errorCount: (previous?.errorCount ?? 0) + (update.ok ? 0 : 1),
+    updatedAt: now,
+  };
+  if (update.ok) health.lastOkAt = now;
+  else if (previous?.lastOkAt) health.lastOkAt = previous.lastOkAt;
+  if (update.ok) {
+    if (previous?.lastErrorAt) health.lastErrorAt = previous.lastErrorAt;
+    if (previous?.lastError) health.lastError = previous.lastError;
+  } else {
+    health.lastErrorAt = now;
+    health.lastError = (update.error ?? 'unknown policy failure').slice(0, 500);
+  }
+  try {
+    mkdirSync(paths.runtimeDir, { recursive: true });
+    writeJsonAtomic(paths.policyHealthFile, health);
+  } catch {
+    // Health reporting must never be the thing that breaks the hook.
+  }
+  return health;
+}
+
+// ---- runtime directory pointer --------------------------------------------
+
+/**
+ * `--runtime <dir>` has to be discoverable by processes that get no flags: the
+ * Claude Code hook, `cw` invoked from a skill, doctor, the monitor. The installer
+ * writes the chosen name next to the hook it installs.
+ */
+export function runtimePointerFile(projectRoot: string): string {
+  return join(resolve(projectRoot), '.claude', 'cw-runtime');
+}
+
+export function readRuntimePointer(projectRoot: string): string | undefined {
+  const file = runtimePointerFile(projectRoot);
+  if (!existsSync(file)) return undefined;
+  try {
+    const value = readFileSync(file, 'utf8').trim();
+    return value || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function writeRuntimePointer(projectRoot: string, runtimeDir: string): void {
+  const file = runtimePointerFile(projectRoot);
+  mkdirSync(join(resolve(projectRoot), '.claude'), { recursive: true });
+  writeFileSync(file, `${runtimeDir}\n`, 'utf8');
+}
+
+/** Explicit flag wins, then the installed pointer, then the default. */
+export function resolveRuntimeDirName(projectRoot: string, explicit?: string): string {
+  return explicit ?? readRuntimePointer(projectRoot) ?? DEFAULT_CONFIG.runtimeDir;
 }
 
 export function runMtimeMs(paths: RuntimePaths, runId: string): number {

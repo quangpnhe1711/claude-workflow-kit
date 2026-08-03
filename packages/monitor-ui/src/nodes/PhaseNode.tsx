@@ -5,6 +5,7 @@ import { ago, elapsed } from '../derive';
 export interface PhaseNodeData extends Record<string, unknown> {
   node: WorkflowNode;
   status: NodeStatusView;
+  artifacts: Array<{ name: string; present: boolean }>;
   run: RunView;
   nowMs: number;
   selected: boolean;
@@ -21,10 +22,12 @@ const BADGE: Record<NodeStatusView, string> = {
 };
 
 export function PhaseNode({ data }: NodeProps) {
-  const { node, status, run, nowMs, selected } = data as PhaseNodeData;
+  const { node, status, artifacts, run, nowMs, selected } = data as PhaseNodeData;
   const state = run.nodes[node.id];
   const isCurrent = run.currentNode === node.id;
   const live = status === 'ACTIVE' || status === 'STALE' || status === 'WAITING_USER';
+  const missing = (artifacts ?? []).filter((a) => !a.present);
+  const lagging = isCurrent && run.derivedSemantic === 'SEMANTIC_LAG';
 
   return (
     <div
@@ -58,6 +61,16 @@ export function PhaseNode({ data }: NodeProps) {
             </>
           )}
         </div>
+      )}
+
+      {lagging && (
+        <div className="phase-node__lag warn">
+          semantic lag — no transition since {ago(run.lastSemanticAt, nowMs)}
+        </div>
+      )}
+
+      {missing.length > 0 && (
+        <div className="phase-node__missing warn">missing {missing.map((a) => a.name).join(', ')}</div>
       )}
 
       {status !== 'STALE' && !live && node.skill && <div className="phase-node__impl">{node.skill}</div>}

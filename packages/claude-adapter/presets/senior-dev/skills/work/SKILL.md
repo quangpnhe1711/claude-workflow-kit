@@ -3,14 +3,21 @@ name: work
 description: Route an engineering task to the correct project workflow. Use when the user provides a task but is unsure whether to run bug-fix or feature-change.
 disable-model-invocation: true
 argument-hint: "[task + inputs]"
+effort: high
 ---
 
 Classify `$ARGUMENTS` using evidence, not keyword matching.
 
-Route:
-- Existing behavior is wrong/broken and expected behavior is known or inferable -> invoke `bug-fix`.
-- New capability, business-rule change, redesign, or requirement/document-driven change -> invoke `feature-change`.
-- If the task contains both, choose the workflow that owns the primary business change and treat the defect as evidence within it.
+Route by invoking the workflow body directly:
+- Existing behavior is wrong/broken and expected behavior is known or inferable
+  -> invoke `wf-bug-fix`.
+- New capability, business-rule change, redesign, or requirement/document-driven
+  change -> invoke `wf-feature-change`.
+- If the task contains both, choose the workflow that owns the primary business
+  change and treat the defect as evidence within it.
+
+Route to `wf-bug-fix` / `wf-feature-change`, never to `bug-fix` / `feature-change`:
+those two are user-entry points and cannot be invoked by the model.
 
 Do not create a third ad-hoc workflow.
 

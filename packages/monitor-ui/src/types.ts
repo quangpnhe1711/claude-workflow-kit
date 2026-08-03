@@ -11,17 +11,35 @@ export type RunStatusView =
   | 'WAITING_USER'
   | 'COMPLETED'
   | 'FAILED'
+  | 'ABANDONED'
   | 'POSSIBLY_STALLED';
 
-export type RunView = RunState & { derivedStatus: RunStatusView };
+/** Runtime moving while the phase does not. Never a failure, always reported. */
+export type SemanticView = 'OK' | 'SEMANTIC_LAG';
+
+export type RunView = RunState & { derivedStatus: RunStatusView; derivedSemantic: SemanticView };
+
+export interface PolicyHealthView {
+  status: 'OK' | 'DEGRADED' | 'DISABLED';
+  enforceGates: boolean;
+  lastOkAt?: string;
+  lastErrorAt?: string;
+  lastError?: string;
+  errorCount: number;
+  updatedAt: string;
+}
 
 export interface Snapshot {
   projectRoot: string;
   runtimeDir: string;
   stallThresholdSeconds: number;
+  semanticLagThresholdSeconds: number;
   currentRunId: string | null;
   workflows: WorkflowDefinition[];
   runs: RunView[];
+  unreadableRuns: string[];
+  quarantinedRuns?: string[];
+  policyHealth?: PolicyHealthView | null;
   generatedAt: string;
 }
 

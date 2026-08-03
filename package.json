@@ -10,8 +10,8 @@
     "node": ">=18.17"
   },
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspace @claude-workflow-kit/workflow-core && npm run build --workspaces --if-present",
+    "test": "npm run build --workspace @claude-workflow-kit/workflow-core && npm run test --workspaces --if-present",
     "e2e": "npm run build && node scripts/e2e.mjs",
     "dev:monitor": "npm run dev --workspace @claude-workflow-kit/monitor-ui",
     "clean": "node -e \"for (const p of ['workflow-core','monitor-server','monitor-ui','installer']) require('fs').rmSync('packages/'+p+'/dist',{recursive:true,force:true})\""
