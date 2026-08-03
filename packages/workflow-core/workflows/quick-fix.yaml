@@ -1,0 +1,52 @@
+id: quick-fix
+label: Quick Fix
+description: >-
+  Short workflow for a small, explicitly specified change. The requested outcome
+  is already clear, so there is no evidence reconciliation, no business gate and
+  no independent review: locate the narrow cause, make the smallest correct
+  change, validate it focusedly, stop. Escalates to bug-fix or feature-change
+  when the narrow path turns out not to hold.
+
+nodes:
+  - id: prompt
+    label: User Prompt
+    kind: start
+    description: An explicit request whose expected result is already clear.
+
+  - id: triage
+    label: Triage
+    skill: wf-quick-fix
+    description: >-
+      Locate the relevant implementation and confirm this really is a narrow fix.
+      Direct code path only — no repository scan, no document review. Escalate
+      instead of inventing behaviour.
+
+  - id: fix
+    label: Fix
+    skill: wf-quick-fix
+    description: Smallest causal change. No unrelated refactor, no optional improvements.
+
+  - id: validate
+    label: Validate
+    skill: wf-quick-fix
+    description: >-
+      Focused validation — nearest test, cheap typecheck/build, or one runtime
+      probe. Plus a lightweight diff check. Not the full suite, not the reviewer
+      agent.
+
+  - id: done
+    label: Done
+    kind: end
+
+edges:
+  - from: prompt
+    to: triage
+  - from: triage
+    to: fix
+  - from: fix
+    to: validate
+  - from: validate
+    to: fix
+    label: focused failure
+  - from: validate
+    to: done

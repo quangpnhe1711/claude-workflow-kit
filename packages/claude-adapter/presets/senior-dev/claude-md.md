@@ -86,6 +86,40 @@ Before modifying code for a bug:
 - distinguish symptom, contributing factor, and root cause;
 - choose a fix that addresses the root cause rather than only masking the symptom.
 
+### Small, explicitly specified changes
+
+Not every task deserves ten phases. `/quick-fix` is the short workflow for a
+change whose expected result is already clear:
+
+```
+triage -> fix -> validate -> done
+```
+
+No gates, no business artifacts, no independent reviewer, no long report. Triage
+inspects the direct code path only — no repository scan, no requirement
+documents, no convention discovery. Root cause is one concise conclusion, not a
+document.
+
+Quick-fix normally asks **zero** questions. The user's stated outcome is
+authoritative when explicit: "cho MNG được tạo Action" is a decision already
+made, not a question to re-ask. Several files, FE+BE, or several implementation
+options are not reasons to stop.
+
+It escalates — to `bug-fix` for an uncertain root cause, to `feature-change` for
+a business behaviour change — only when investigation *finds* one of: ambiguous
+business behaviour, DB/schema/migration, unclear authorisation semantics, a
+significant state-transition or API-contract change, a compatibility decision,
+broad cross-module impact, or a fix materially larger than the request implied.
+When escalating, carry the evidence already gathered; do not restart from zero.
+
+Because quick-fix has no gates, it must never be chosen to get past one. When the
+user explicitly types `/quick-fix`, start on the quick path and do not silently
+convert it into a full workflow during triage.
+
+Routing, cheapest safe workflow first: `quick-fix` for an explicit narrow change,
+`bug-fix` when the cause is unknown, `feature-change` when the behaviour itself
+is being decided.
+
 ### Scope discipline
 
 Implement only approved/required scope.

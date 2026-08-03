@@ -988,6 +988,49 @@ step('17. a project installed with --runtime <dir> enforces its gates too', asyn
   }
 });
 
+// --- quick-fix: the short workflow ----------------------------------------
+
+step('quick-fix is installed and stays short', () => {
+  for (const skill of ['quick-fix', 'wf-quick-fix']) {
+    assert.ok(
+      existsSync(join(project, '.claude', 'skills', skill, 'SKILL.md')),
+      `${skill} must be installed`,
+    );
+  }
+  assert.match(cw('workflows').stdout, /quick-fix/);
+
+  // Superseding whatever the previous steps left behind is deliberate here.
+  cw('run', 'start', 'quick-fix', '--force', '--reason', 'e2e quick-fix probe', '--label', 'small fix');
+  const opened = state();
+  assert.equal(opened.workflow, 'quick-fix');
+  assert.deepEqual(opened.gates, {}, 'quick-fix must carry no gates');
+
+  // The point of the short workflow: no gate to earn, so source edits are allowed.
+  assert.equal(
+    hookDecision({
+      hook_event_name: 'PreToolUse',
+      session_id: 's1',
+      tool_name: 'Edit',
+      tool_input: { file_path: join(project, 'src', 'orders.js') },
+    }).decision,
+    'allow',
+    'a quick fix must not be blocked by a gate it does not have',
+  );
+
+  for (const phase of ['triage', 'fix', 'validate']) {
+    cw('phase', 'enter', phase);
+    cw('phase', 'complete');
+  }
+  cw('run', 'complete');
+
+  const finished = JSON.parse(
+    cw('run', 'show', '--run', opened.runId, '--json').stdout,
+  );
+  assert.equal(finished.status, 'COMPLETED');
+  assert.equal(finished.currentNode, 'done');
+  assert.deepEqual(finished.artifacts, [], 'no evidence artifacts are required');
+});
+
 step('uninstall leaves the project clean', () => {
   run(kitBin, ['uninstall', '--project', project]);
   assert.ok(!existsSync(join(project, '.claude', 'skills', 'feature-change', 'SKILL.md')));

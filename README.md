@@ -31,7 +31,7 @@ Requirements: Node.js ≥ 18.17, Claude Code, git.
 | [3. Test the monitor in 5 minutes](#3-test-the-monitor-in-5-minutes) | literal walkthrough |
 | [4. Core concepts](#4-core-concepts) | workflow, skill, agent, gate, artifact, run |
 | [5. Core rules](#5-core-rules) | what is enforced, and how strictly |
-| [6. Workflow guide](#6-workflow-guide) | `/feature-change`, `/bug-fix`, `/work`, … |
+| [6. Workflow guide](#6-workflow-guide) | `/quick-fix`, `/feature-change`, `/bug-fix`, `/work`, … |
 | [7. Phase by phase](#7-phase-by-phase) | the real graph, every phase explained |
 | [8. Skills reference](#8-skills-reference) | all 16 skills |
 | [9. How context flows](#9-how-context-flows) | artifacts between phases |
@@ -368,7 +368,7 @@ Cho sửa nội dung và Tag.
 
 **Workflow** — an ordered development process, defined as data (YAML): nodes,
 edges, gates, and the artifacts each phase must produce. Shipped: `feature-change`,
-`bug-fix`, `generic`.
+`bug-fix`, `quick-fix`, `generic`.
 
 **Skill** — a reusable instruction file Claude loads (`.claude/skills/<name>/SKILL.md`).
 Entry-point skills are what you type (`/feature-change`); `wf-*` skills are steps
@@ -476,6 +476,77 @@ for correctness or safety of the approved task.
 
 ## 6. Workflow guide
 
+Pick the cheapest workflow that is safe. A one-line UI fix does not need ten
+phases; a business-rule change does.
+
+| Workflow | Phases | Gates | Typical cost |
+| --- | --- | --- | --- |
+| `/quick-fix` | triage → fix → validate | none | minutes |
+| `/bug-fix` | 10 phases | `ROOT_CAUSE_READY`, `BUSINESS_READY` | a full session |
+| `/feature-change` | 10 phases | `BUSINESS_READY` | a full session |
+
+### `/quick-fix`
+
+**Use when** the requested outcome is already clear and the scope looks narrow:
+an explicit small bug fix, a visibility condition, a duplicate import, a
+z-index/layout fix, a flag that does not behave as documented.
+
+**Input example**
+
+```
+/quick-fix
+Cho MNG hiển thị nút Tạo Action. BE hiện tại đã cho phép tạo.
+```
+
+```
+/quick-fix
+Chip Liên lạc đang import Communication 2 lần, sửa lại.
+```
+
+**What Claude does**
+
+1. Opens a run (`cw run start quick-fix`).
+2. **Triage** — inspects the direct code path only: the relevant component, its
+   nearest condition/helper, the backend authorisation *only if the request
+   depends on it*, the nearest existing test. No repository scan, no requirement
+   documents, no git history, no convention discovery. Root cause is one concise
+   conclusion, not a document.
+3. **Fix** — the smallest causal change. No unrelated refactor, no adjacent
+   fixes, no new abstraction, no new tests or docs by default.
+4. **Validate** — focused: nearest test, cheap typecheck/build, or one runtime
+   probe. Then a lightweight diff check (intended change present, nothing
+   unrelated, validation passed). No full E2E, no reviewer agent.
+
+**Can it stop and ask?** Normally **no questions at all**. Your stated outcome is
+authoritative when it is explicit — "cho MNG được tạo Action" is a decision
+already made, not a question to re-ask. Several files, FE+BE, or several possible
+implementations are not reasons to stop.
+
+**Can it escalate?** Yes, but only on something investigation actually *finds*:
+ambiguous business behaviour, DB/schema/migration, unclear authorisation
+semantics, a significant state-transition or API-contract change, a
+compatibility decision, broad cross-module impact, an uncertain root cause, or a
+fix materially larger than the request implied. It then retires the quick run
+with a stated reason and continues in `bug-fix` (uncertain cause) or
+`feature-change` (behaviour decision), **carrying the evidence it already
+gathered** — analysis does not restart from zero.
+
+**Main output** — the diff, plus a three-line result:
+
+```
+Fixed:      <what changed>
+Cause:      <one sentence>
+Validation: <what was actually run>
+```
+
+No artifacts are written by default.
+
+**When not to use** — the behaviour itself is being decided, a migration is
+involved, or you cannot state the expected result in one sentence. Because
+`quick-fix` carries no gates, never use it to get past one: `cw run start` refuses
+to open it while a gated run is active, and forcing a gated run aside still
+requires a stated reason.
+
 ### `/feature-change`
 
 **Use when** you want new behaviour, a business-rule change, a redesign, or a
@@ -557,9 +628,13 @@ Người dùng không xoá được Liên lạc đã gắn báo cáo — không 
 ```
 
 **What Claude does** — classifies the task from evidence (not keywords) and
-invokes the `wf-bug-fix` or `wf-feature-change` body directly. If a task contains
-both, it picks the workflow that owns the primary business change and treats the
-defect as evidence inside it. It never invents a third ad-hoc workflow.
+invokes `wf-quick-fix`, `wf-bug-fix` or `wf-feature-change` directly, starting
+with the **cheapest safe** option: an explicit narrow request goes to
+`wf-quick-fix`, an unclear cause to `wf-bug-fix`, a behaviour decision to
+`wf-feature-change`. It does not demand broad analysis before choosing the quick
+path — `wf-quick-fix` escalates itself when triage finds a reason to. If a task
+contains both a defect and a business change, it picks the workflow that owns the
+primary business change and treats the defect as evidence inside it.
 
 **Can it stop and ask?** Only if the classification itself changes what inputs
 are required and cannot be resolved from the task.
@@ -656,6 +731,27 @@ await-business  ───────┘  (answered)
                         │
                         ▼
                      done  (end)
+```
+
+### `quick-fix` (5 nodes)
+
+No gates, no waiting nodes, no declared artifacts — which is exactly why it is
+cheap, and why escalation rather than gate-bypass is the safety mechanism.
+
+```
+prompt  (start)
+   │
+   ▼
+triage      ← direct code path only; escalates out if the narrow path breaks
+   │
+   ▼
+ fix  ◄──────────┐  focused failure
+   │             │
+   ▼             │
+validate ────────┘
+   │
+   ▼
+ done  (end)
 ```
 
 ### `bug-fix` (14 nodes)
@@ -811,20 +907,22 @@ of restarting.
 
 ## 8. Skills reference
 
-16 skills ship in the `senior-dev` preset. "User can call?" reflects the actual
+18 skills ship in the `senior-dev` preset. "User can call?" reflects the actual
 frontmatter: entry points are marked `disable-model-invocation: true` (you type
 them, the model cannot invoke them), `wf-*` step skills are marked
 `user-invocable: false` (the reverse).
 
 | Skill | User can call? | Purpose | Called by | Main output |
 | --- | :---: | --- | --- | --- |
-| `work` | ✅ | Route a task to the right workflow | you | invokes `wf-bug-fix` / `wf-feature-change` |
+| `work` | ✅ | Route a task to the cheapest safe workflow | you | invokes `wf-quick-fix` / `wf-bug-fix` / `wf-feature-change` |
+| `quick-fix` | ✅ | Entry point for the short workflow | you | invokes `wf-quick-fix` |
 | `feature-change` | ✅ | Entry point for the feature workflow | you | invokes `wf-feature-change` |
 | `bug-fix` | ✅ | Entry point for the defect workflow | you | invokes `wf-bug-fix` |
 | `refresh-conventions` | ✅ | Bootstrap/refresh the convention cache | you | `conventions/*.md` + `metadata.json` |
 | `wf-status` | ✅ | Report the current run, gates, next transitions | you | `cw status` interpretation |
 | `wf-feature-change` | ❌ | The feature workflow body (10 phases) | `feature-change`, `work` | the whole run |
 | `wf-bug-fix` | ❌ | The defect workflow body (10 phases) | `bug-fix`, `work` | the whole run |
+| `wf-quick-fix` | ❌ | The short workflow body (triage → fix → validate) | `quick-fix`, `work` | the diff + a 3-line result |
 | `wf-evidence-reconciliation` | ❌ | Reconcile intent/docs/DB/code/tests | `wf-feature-change` | `evidence.md` |
 | `wf-bug-root-cause` | ❌ | Reproduce, trace, establish causal root cause | `wf-bug-fix` | `root-cause.md` |
 | `wf-business-decision` | ❌ | Resolve business behaviour (hard gate) | both bodies | `business-decision.md` |
@@ -1380,6 +1478,13 @@ persisted to `policy-health.json` as `DEGRADED`, which `cw policy` reports,
 
 ## 17. Practical daily usage
 
+**A small, explicit fix** — the common case, and the cheap one
+
+```
+/quick-fix
+<the change + its expected result>
+```
+
 **A feature or business-rule change**
 
 ```
@@ -1422,6 +1527,12 @@ You do **not** need to ask for any of this — the workflow already carries it:
 Adding "please analyse first, then plan, then test, then review" only makes the
 prompt longer. Describe the *business outcome* instead — that is the input the
 workflow actually needs.
+
+> **Tip — do not pay for phases you do not need.** The full workflows exist for
+> changes where the behaviour is still being decided. For "make this button
+> visible for MNG, the API already allows it", `/quick-fix` gives you triage →
+> fix → validate and a three-line result. It escalates on its own if triage finds
+> a migration, an ambiguity or an unknown cause.
 
 ---
 
