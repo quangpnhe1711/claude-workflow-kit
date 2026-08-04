@@ -1,6 +1,6 @@
 ---
 name: wf-change-readiness
-description: Internal pre-code step that creates implementation plan, cross-module impact analysis, risk analysis, scope boundaries, and test strategy.
+description: Internal LEVEL 3 pre-code step that creates an implementation plan, high-risk cross-module impact analysis, scope boundaries, and a proportional test strategy.
 user-invocable: false
 effort: high
 ---
@@ -47,14 +47,18 @@ concurrency/transactions, regressions, audit/history, legacy records.
 Do not implement optional items.
 
 ## Test strategy
-Derive tests from business rules before implementation:
+Derive tests from business rules and risk before implementation:
 - happy path;
 - negative/permission;
 - boundary/edge cases;
 - regression;
 - legacy/backward compatibility;
 - migration/data;
-- E2E scenarios.
+- E2E scenarios only when a critical journey or remaining cross-layer gap
+  justifies them; otherwise state why E2E is not needed.
+
+Do not mechanically include every test category. Mark non-applicable areas and
+prefer targeted evidence over a full suite when it covers the risk.
 
 ## Artifact contract
 
@@ -66,7 +70,7 @@ This phase owns three files and the workflow definition declares all three:
 | `impact-risk-scope.md` | impact analysis, risk analysis, scope |
 | `test-strategy.md` | the test strategy |
 
-Persist all three to `.ai-workflow/runs/<runId>/`, then record each with
+Persist all three to `<runtimeDir>/runs/<runId>/`, then record each with
 `cw artifact <filename>`. The runtime enforces this: `cw phase complete` and the
 next `cw phase enter` are both refused while one of the three is missing or
 empty, so implementation cannot begin without them. Write the files — do not

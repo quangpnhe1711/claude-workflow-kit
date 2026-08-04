@@ -1,6 +1,6 @@
 ---
 name: wf-implement
-description: Internal implementation step that codes only after business, root-cause (for bugs), plan, impact/risk/scope, test strategy, and conventions are ready.
+description: Internal LEVEL 3 implementation step that codes only after the full workflow's business/root-cause gates, impact/scope, test strategy, and relevant conventions are ready.
 user-invocable: false
 effort: high
 ---
@@ -11,7 +11,9 @@ Before editing verify:
 - `cw status` does not print a `mutation DENIED` line. If it does, the hook will
   refuse every edit; resolve the gate instead of retrying.
 - Implementation plan exists.
-- Impact/risk/scope exists.
+- Impact/risk/scope exists. For an analysis handoff, use
+  `impact-analysis.md` and `recommended-solution.md`; legacy runs use
+  `impact-risk-scope.md` and `business-decision.md`.
 - Test strategy exists.
 - Relevant conventions are loaded.
 
@@ -54,6 +56,7 @@ Pass exactly:
 - `taskLabel`: the run label;
 - nothing else. No summary of the change, no self-assessment, no "I verified X".
 
-Expected back: a verdict object — `PASS` or `FAIL` plus findings, each with
-Severity / Evidence / Problem / Impact / Recommended correction. Persist it to
-`review.md`.
+Expected back: workflow verdict `PASS`/`FAIL`, reporting readiness
+`READY`/`READY WITH FOLLOW-UP`/`NOT READY`, plus P0-P3 findings with Location /
+Current behavior / Evidence / Problem / Consequence / Recommended correction.
+Persist it to `review.md`.

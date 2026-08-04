@@ -1,40 +1,61 @@
 ---
 name: wf-validation-e2e
-description: Internal validation step that executes the predefined test strategy, build/integration checks, and E2E/runtime verification with evidence.
+description: Internal LEVEL 3 validation step. Execute risk-based automated, integration, runtime, manual, and optional E2E verification with truthful evidence. E2E is selected only when it materially closes a remaining risk.
 user-invocable: false
-effort: high
+effort: medium
 ---
 
-Validate against resolved business behavior and the pre-code test strategy.
+Validate against resolved behavior and actual risk. Verification is not a fixed
+checklist and E2E is not a default completion condition.
 
-Run only relevant commands, plus necessary broader regression checks based on impact.
+Use the cheapest sufficient evidence in this order:
 
-Evidence may include:
-- unit tests;
-- integration/API tests;
-- build;
-- typecheck/lint;
-- migration/schema checks;
-- runtime verification;
-- browser/API E2E;
-- data-state verification.
+1. targeted unit/function/component tests;
+2. affected API/service/component tests;
+3. relevant typecheck, lint, or build;
+4. integration tests for behavior crossing real layer boundaries;
+5. E2E/runtime scenarios only for a critical journey or coverage gap that the
+   prior checks cannot prove.
 
-For each relevant business rule, map evidence to the rule.
+Do not run the full repository suite when a targeted set covers the affected
+boundary. Do not run browser E2E to make the report look more complete. Manual
+verification is valid when it is faster and proportionate to the remaining UI
+or interaction risk.
 
-If a test fails:
-- determine whether caused by the change;
-- fix task-caused failures within approved scope and rerun;
-- record unrelated failures separately;
-- raise only when unrelated failure prevents trustworthy completion.
+For each applicable rule or risk, record:
 
-E2E should verify the real flow where feasible, not just compilation.
+- check/command or manual action;
+- expected result;
+- actual result;
+- `PASS`, `FAIL`, or `NOT VERIFIED`;
+- whether a failure is task-caused or unrelated.
 
-Never mark PASS because code "looks correct".
+Persist `<runtimeDir>/runs/<runId>/validation.md` with distinct sections:
 
-Persist concise commands/results/evidence to
-`.ai-workflow/runs/<runId>/validation.md` and record it with
-`cw artifact validation.md`. The independent reviewer reads this file directly,
-so record the actual commands and their actual output, not a claim of success.
+```markdown
+# Validation
 
-Return the result to the calling workflow. Raise to the user only a failure that
-blocks trustworthy completion.
+## Automated
+## Integration
+## Manual
+## Not Verified
+## Unrelated Failures
+## E2E Decision
+```
+
+In `E2E Decision`, state `REQUIRED` or `NOT JUSTIFIED` and the concrete risk
+reason. If E2E runs in the later `e2e` phase, append its scenario and actual
+result to this artifact. Record it with `cw artifact validation.md`.
+
+If a task-caused check fails, fix within approved scope and rerun. Record an
+unrelated failure without fixing it unless it prevents trustworthy completion.
+
+Valid final assessments include:
+
+- `PASS`
+- `PASS WITH MANUAL VERIFICATION`
+- `FAIL`
+
+Never mark PASS because code looks correct. Keep these distinctions explicit:
+implemented is not verified; build passed is not functional testing; unit tests
+are not E2E; manual verification required is not failure.

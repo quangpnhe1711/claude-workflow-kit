@@ -1,11 +1,14 @@
 ---
 name: wf-bug-fix
-description: Controlled defect workflow body. Reproduce and establish causal root cause behind the ROOT_CAUSE_READY gate, resolve expected behavior behind BUSINESS_READY, plan, implement the smallest root-cause fix, validate, E2E, independent review, assessment, compact report. Invoked by the bug-fix and work entry skills.
+description: Full LEVEL 3 defect workflow body. Establish causal root cause behind ROOT_CAUSE_READY, resolve material business behavior behind BUSINESS_READY, plan high-risk impact, implement, validate proportionally, conditionally run E2E, independently review, assess, and report at the requested depth.
 user-invocable: false
 effort: high
 ---
 
 Execute this workflow for the defect passed in by the caller.
+
+This is the full path for LEVEL 3 risk. If the defect is L0-L2, return it to
+`wf-quick-fix` or `wf-standard-change`.
 
 Report every phase transition with `cw` as it happens. The CLI owns run state;
 never edit `state.json`.
@@ -19,9 +22,13 @@ Open the run first:
 
 ```
 cw run start bug-fix --label "<short defect label>"
+cw note "Level: L3 — High risk"
 ```
 
-If another run is active, do not start a second one — see `cw status`.
+If the active run is already `bug-fix` because L1/L2 escalated in place, keep
+that run and do not call `cw run start` again. Continue with the first required
+L3 phase and reuse the findings already recorded in the event log. If a
+different run is active, do not start a second one — see `cw status`.
 
 ## Phase 0 — Input
 Expected input:
@@ -39,7 +46,7 @@ can be safely discovered.
 
 Invoke `wf-bug-root-cause`.
 
-Required gate output, persisted to `.ai-workflow/runs/<runId>/root-cause.md`:
+Required gate output, persisted to `<runtimeDir>/runs/<runId>/root-cause.md`:
 - reproduction status;
 - current/legacy code flow;
 - why current behavior occurs;
@@ -108,9 +115,16 @@ Do not add optional improvements.
 
 Invoke `wf-validation-e2e`.
 
-Run appropriate regression validation, then `cw phase complete`,
-`cw phase enter e2e` for runtime verification that the reported symptom is gone,
-then `cw phase complete`.
+Run appropriate targeted/integration regression validation. Then decide whether
+E2E materially reduces a remaining risk.
+
+- Justified critical journey or cross-layer gap: complete validation, enter
+  `e2e`, verify the symptom is gone, and complete it.
+- Not justified: complete validation, then
+  `cw phase skip e2e --message "<why lower-level/manual evidence is sufficient>"`.
+
+Do not run E2E merely because this is the full workflow. The graph permits both
+paths into review.
 
 If failures are caused by the change, fix within approved scope and rerun.
 If unrelated regression is discovered, record it; raise only if it blocks
@@ -140,8 +154,8 @@ Invoke `wf-product-assessment`. Do not automatically implement recommendations.
 ## Phase 9 — Report
 `cw phase enter report`
 
-Invoke `wf-final-report`. Return only the concise final report. No execution
-diary.
+Invoke `wf-final-report`. It returns a quick report unless the original request
+explicitly asks for a detailed, template-backed deliverable. No execution diary.
 
 ```
 cw phase complete

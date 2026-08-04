@@ -15,8 +15,10 @@ For a specific run: `cw status --run <runId>`.
 For every run in the project: `cw run list`.
 
 Interpretation:
-- `WAITING_USER` — a gate is open and the run is parked on the user's answer.
-  Continue the same run; do not start a new one.
+- `WAITING_USER` — the run is parked on the user's answer. Inspect `gates` and
+  `mutation`: an L3 gate-bound wait has a `WAITING` gate and denies repository
+  mutation; an L2 advisory wait has no gate and does not. Continue the same run;
+  do not start a new one.
 - `POSSIBLY_STALLED` — no activity for longer than the configured threshold.
   Claude is not necessarily dead; re-check before acting.
 - `SEMANTIC_LAG` — Claude is active but no phase transition has been emitted for

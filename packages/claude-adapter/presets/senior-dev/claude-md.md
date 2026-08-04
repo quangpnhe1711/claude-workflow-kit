@@ -1,245 +1,293 @@
 ## AI Engineering Rules (claude-workflow-kit / senior-dev)
 
-### Execution mode
+### Operating principle
 
-COMPRESS WORDING, NOT SUBSTANCE.
+Correctness + speed beat workflow compliance.
 
-Quiet is about narration, never about work. Depth budget:
+Prioritize, in order:
 
-| Activity | Depth | Visible in chat |
+1. correct behavior;
+2. no important regression;
+3. reasonable implementation time;
+4. verification proportional to risk;
+5. workflow and skills only when they add direct value.
+
+If a workflow step costs more than the risk it materially reduces, omit it.
+Execution is adaptive, testing is risk-based, human verification is valid,
+skills are on demand, reporting is standardized, and documentation depth is
+controlled by the user.
+
+`<runtimeDir>` means the project runtime directory recorded in
+`.claude/cw-runtime`; it is `.ai-workflow` by default.
+
+COMPRESS WORDING, NOT SUBSTANCE. Keep execution narration low; do not narrate
+routine reading, searching, editing, builds, tests, or diff checks. State a
+classification, escalation, real decision, blocker, or material risk concisely.
+
+### Analysis-first requests
+
+When the user asks for business analysis, impact measurement, solution options,
+or an implementation plan against the current source without coding, route to
+`solution-analysis`. Accept free-form input and parse goal, business behavior,
+scope, constraints, acceptance criteria, open questions, and assumptions.
+
+The workflow may read source and valid convention cache but never edits product
+code. It must produce `business-analysis.md`, `impact-analysis.md`,
+`solution-options.md`, `recommended-solution.md`, `implementation-plan.md`, and
+`test-strategy.md`, then stop at `ANALYSIS_READY`. Only explicit approval of the
+solution and scope may create a trace-linked `feature-change` run.
+
+A linked feature run checks relevant-source freshness before implementation.
+Reuse valid artifacts; do not repeat business/solution analysis. If material
+source changed, keep writes gated and refresh only the affected analysis.
+
+### Classify every engineering task first
+
+Classify from the request and narrow evidence; do not run a broad audit just to
+prove the level.
+
+| Level | Typical scope | Default execution |
 | --- | --- | --- |
-| Execution narration (read/search/trace/edit/build/test/diff) | LOW | no |
-| Analysis, evidence reconciliation, root cause, impact | HIGH | only the conclusion |
-| Review and final report | HIGH | yes, in full |
+| L0 — Trivial | text/label/typo, small CSS, constant/config, tiny UI condition, behavior-preserving local refactor | understand -> change -> minimal verify |
+| L1 — Small fix | bounded bug or function/component/API/filter/validation change with a narrow path | understand -> concise root cause -> fix -> targeted verify |
+| L2 — Medium | multiple files/layers, FE+BE, bounded business/API behavior, DB query, local permission/state/integration | targeted impact -> implement -> targeted/integration/manual verify |
+| L3 — High risk | migration or production-data risk, auth/security, payment, concurrency/transaction, cross-service, important contract/compatibility, major business flow, broad modules | full controlled workflow |
 
-Do not narrate routine actions such as reading/searching files, tracing
-symbols, editing files, running builds/tests, or checking git diff.
+Route L0-L1 to `quick-fix`, L2 to `standard-change`, and L3 to the full
+`bug-fix` or `feature-change` topology. Full workflow is reserved for L3.
 
-Raise an issue only when a real decision/blocker/risk exists. When raising one:
-1. Problem
-2. Impact
-3. Recommended resolution
-4. Decision required
+The level may rise when investigation finds hidden risk. State it once:
 
-Never shorten an analysis, a review or a final report to look terse. Cutting
-the number of findings is not compression; it is skipping work. Cut adjectives,
-progress commentary and restatement instead.
+`Escalated L1 -> L2 because: <concrete evidence>`
 
-This policy is self-contained. Do not delegate output shaping to an external
-compression skill or plugin: workflow correctness must not depend on one, and a
-file-rewriting tool is not an output style.
+Carry forward files, traces, and conclusions already gathered. Do not restart
+analysis or repeat completed work; add only the newly justified steps. Use
+`cw run escalate <higher-workflow> --reason "<concrete finding>"` so the task
+keeps the same run id, evidence directory, owner, and event history.
 
-### Evidence policy
+### Fast and medium paths
 
-Never treat requirement/design documents (for example TKCB, TKCT, BR/BRD),
-database schema, existing code, or existing tests as absolute truth in
-isolation.
+For L0-L1, inspect the directly relevant file/path, make the smallest correct
+change, run minimal or targeted checks, and stop. Do not default to architecture
+analysis, full impact discovery, business review, convention refresh, reviewer
+agents, documentation, full suites, or E2E.
 
-Classify conclusions as:
-- FACT
-- INFERENCE
-- ASSUMPTION
-- PROPOSAL
+For L0, do not invent root-cause prose for a mechanical edit. For an L1 defect,
+identify a concise causal root cause. If targeted automated checks adequately
+cover it, the task is done. If remaining coverage is a quick UI interaction,
+provide manual steps instead of creating browser E2E.
 
-When evidence conflicts, expose the conflict. Do not silently choose one source.
+For L2, inspect only affected and necessary downstream boundaries. Confirm
+behavior only when genuinely ambiguous, implement, and run targeted tests plus
+integration only when behavior crosses a boundary that lower-level checks do
+not cover.
 
-### Hard gates
+Stop investigation once evidence supports a correct, maintainable solution with
+no material unresolved risk. Do not turn a local bug into an architecture
+exercise or continue searching for an theoretically better solution after a
+sufficient one is established.
 
-Gates are enforced by the toolkit, not only by this file. While any active run in
-this project has an unpassed gate, the `PreToolUse` hook denies:
+### Skills are on demand
 
-- every file-writing tool — `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, MCP
-  filesystem writers;
-- arbitrary command execution — `Bash`, `PowerShell` and any other
-  command-running tool, unless the command is read-only (`git status/diff/log/
-  show`, `grep`/`rg`/`ls`/`cat`, `cw …`) or a test/build command.
+Do not stack skills because they exist. Invoke one workflow body for the task
+level. Use a specialist step only when it directly helps the current risk or the
+user requested its deliverable.
 
-What stays writable behind the gate is the evidence the gate itself needs: a
-write to `.ai-workflow/runs/<runId>/<file>` where `<file>` is the artifact the
-*current* phase declares. Enter the phase first, then write its artifact.
+- Convention discovery: only when local/cache guidance is absent or materially
+  stale for the touched area.
+- Architecture/audit: only for structural or cross-module risk.
+- Frontend design: only for actual UI design/rework.
+- E2E workflow: only for a justified critical journey or coverage gap.
+- Documentation/reporting: when the user asks for the corresponding deliverable
+  or a full workflow needs its final artifact.
 
-A denial is information: the gate is open. Resolve the gate, never route around
-it. Retiring the run (`cw run abandon`, `cw run start --force`) is the only way
-past an open gate, it requires a stated reason, and the unpassed gates are
-recorded — so use it when the task is genuinely withdrawn, never to keep working.
+Do not rediscover the project when a valid artifact or one or two neighboring
+files already establish the convention.
 
-#### Business gate
-NO BUSINESS DECISION = NO CODING.
+### Convention cache
 
-Before implementation, desired business behavior must be explicit enough to determine:
-- actor/permission;
-- trigger/precondition;
-- state/data transition;
-- forbidden behavior;
-- important edge cases;
-- legacy/backward-compatibility behavior where relevant.
+Reuse `<runtimeDir>/conventions/` across tasks. `cw conventions status` reports
+code, comments, testing, and database areas as cached, missing, stale,
+unrecorded, or invalid.
 
-If an unresolved business decision materially changes implementation, stop and ask.
+Refresh only a relevant area when the artifact is absent/invalid, materially
+stale, a new module follows another convention, the codebase changed
+substantially, local code contradicts the cache, or the user requests refresh.
+An evidence-file timestamp change is a review signal, not automatic proof that
+every convention must be rediscovered.
 
-#### Bug root-cause gate
-NO ROOT CAUSE = NO FIX.
+Precedence: intentional local convention near touched code -> valid cache ->
+generic defaults or external skills.
 
-Before modifying code for a bug:
-- reproduce when feasible;
-- trace current/legacy flow;
-- explain why current code produces the symptom;
-- distinguish symptom, contributing factor, and root cause;
-- choose a fix that addresses the root cause rather than only masking the symptom.
+### Business questions are proportional
 
-### Small, explicitly specified changes
+Do not ask again when behavior is clear from the request, acceptance criteria,
+reproduction, supplied documentation, current behavior, or prior decisions.
 
-Not every task deserves ten phases. `/quick-fix` is the short workflow for a
-change whose expected result is already clear:
+Ask only when all are true:
 
+1. at least two behaviors are plausible;
+2. the correct choice cannot be inferred safely; and
+3. the choice materially affects business data, permission, state, or contract.
+
+UI implementation detail is not a business blocker. Do not stop merely to ask
+something that context can answer safely.
+
+### Verification is proportional to risk
+
+Prefer evidence in this order:
+
+1. targeted unit/function/component test;
+2. affected API/service/component test;
+3. relevant typecheck, lint, or build;
+4. integration test for a real multi-layer boundary;
+5. E2E only when it materially reduces remaining risk.
+
+Do not run the full suite when targeted checks sufficiently cover the change.
+Do not run browser E2E for a low-risk interaction that a 30-second manual check
+can verify. Never run E2E to make a report look complete.
+
+Human verification is a valid completion state when implementation and
+appropriate automated checks are complete and the remaining evidence is a quick
+UI/browser interaction. Report:
+
+```text
+IMPLEMENTED
+TARGETED TESTS PASSED
+MANUAL UI VERIFICATION REQUIRED
 ```
-triage -> fix -> validate -> done
-```
 
-No gates, no business artifacts, no independent reviewer, no long report. Triage
-inspects the direct code path only — no repository scan, no requirement
-documents, no convention discovery. Root cause is one concise conclusion, not a
-document.
+For every manual step include the action and expected result. Manual
+verification required is not a blocker or failure by default.
 
-Quick-fix normally asks **zero** questions. The user's stated outcome is
-authoritative when explicit: "cho MNG được tạo Action" is a decision already
-made, not a question to re-ask. Several files, FE+BE, or several implementation
-options are not reasons to stop.
+Keep claims distinct: implemented != verified; reviewed != tested; build passed
+!= functional test passed; unit passed != E2E passed.
 
-It escalates — to `bug-fix` for an uncertain root cause, to `feature-change` for
-a business behaviour change — only when investigation *finds* one of: ambiguous
-business behaviour, DB/schema/migration, unclear authorisation semantics, a
-significant state-transition or API-contract change, a compatibility decision,
-broad cross-module impact, or a fix materially larger than the request implied.
-When escalating, carry the evidence already gathered; do not restart from zero.
+### Definition of done by level
 
-Because quick-fix has no gates, it must never be chosen to get past one. When the
-user explicitly types `/quick-fix`, start on the quick path and do not silently
-convert it into a full workflow during triage.
+- L0: requested change complete; necessary syntax/type check passed.
+- L1: causal root cause for a bug; fix complete; targeted evidence passed;
+  manual steps when needed.
+- L2: necessary impact understood; implementation complete; relevant automated
+  checks passed; integration/manual/E2E chosen by risk.
+- L3: full impact/risk review; implementation complete; migration/compatibility
+  handled when applicable; appropriate integration/E2E and rollout verification.
 
-Routing, cheapest safe workflow first: `quick-fix` for an explicit narrow change,
-`bug-fix` when the cause is unknown, `feature-change` when the behaviour itself
-is being decided.
+### L3 hard gates
 
-### Scope discipline
+Hard gates apply only after a full L3 workflow starts. Do not weaken them or use
+a lower workflow to bypass an existing gated run.
 
-Implement only approved/required scope.
+NO BUSINESS DECISION = NO CODING in an L3 run. The resolved behavior must cover
+relevant actor/permission, trigger/precondition, state/data transition,
+forbidden behavior, important edges, and compatibility. If this is already
+clear, record it and pass without asking the user.
 
-Do not automatically implement optional improvements found during work.
-Record them in post-implementation assessment instead.
+NO ROOT CAUSE = NO FIX for an L3 defect. Reproduce when feasible, trace the
+necessary current/legacy flow, distinguish symptom/direct cause/root cause, and
+address the cause. Deterministic code/data evidence is valid when runtime
+reproduction is impractical.
 
-An improvement becomes implementation scope only if:
-- required for correctness/safety of the approved task; or
-- explicitly approved by the user.
+While an L3 gate is open, the installed hook denies repository-writing tools
+and arbitrary commands, but permits the declared evidence artifact and allowed
+read-only/test commands. Resolve the gate; never route around it.
 
-### Test discipline
+### Evidence and scope
 
-Define test strategy from resolved business behavior before completing implementation.
+User intent, requirements/design documents, database schema, code, and tests are
+evidence, not authority in isolation. Surface material conflicts. Classify
+uncertain conclusions as FACT, INFERENCE, ASSUMPTION, or PROPOSAL when that
+distinction helps a decision.
 
-Validation must use evidence:
-- unit/integration tests where relevant;
-- build/typecheck/lint where relevant;
-- migration validation where relevant;
-- E2E/runtime verification where feasible.
+Implement only required scope. Do not automatically implement optional findings
+or unrelated improvements. An adjacent change belongs in scope only when needed
+for correctness/safety or explicitly requested.
 
-Do not claim PASS without evidence.
+### Reporting mode is independent of task level
 
-### Convention policy
+Use QUICK REPORT by default after task completion unless the user asks for a
+detailed deliverable. Include only useful sections, in stable order:
 
-Reuse persisted conventions from `.ai-workflow/conventions/`.
+1. Level
+2. Cause / Reason
+3. Changed
+4. Verification
+5. Manual verify, if needed
+6. Remaining risk, if real
 
-Run `cw conventions status` to see which areas are cached, verified, stale or
-missing, and which evidence files they were derived from. Trust that report over
-a guess.
+Use DETAILED REPORT when the user asks for a report/báo cáo, detailed report,
+document, summary/tổng hợp/review deliverable, implementation/bug/impact/change/test report,
+handover, release note, BRD/TKCB comparison, or a document for BA/PO/Tester/End
+User/stakeholders.
 
-Do not rediscover conventions on every task.
+Reuse the corresponding file from `<runtimeDir>/templates/` (normally
+`.ai-workflow/templates/`):
 
-Refresh only when:
-- artifact is missing;
-- relevant section is missing;
-- convention is stale;
-- framework/architecture/module structure materially changed;
-- local code provides strong contradictory evidence;
-- user explicitly asks to refresh.
+- `bug-report.md`
+- `implementation-report.md`
+- `feature-report.md`
+- `impact-analysis.md`
+- `test-report.md`
+- `code-review-report.md`
+- `change-report.md`
+- `release-note.md`
+- `business-change-report.md`
+- `business-analysis.md`
+- `solution-options.md`
+- `recommended-solution.md`
+- `implementation-plan.md`
+- `test-strategy.md`
+- `task-intake.md` (optional input guidance; free-form input remains valid)
 
-Local convention near the modified code overrides a generic cached convention
-when clearly intentional.
+Preserve the chosen template's heading order, terminology, status vocabulary,
+and tables. Do not invent a new format each time. Existing project templates
+take precedence and are never rediscovered.
 
-This applies equally to code style/architecture, naming, comments, tests, and
-database/migrations. Comments follow the project convention. Prefer WHY over
-obvious WHAT.
+For Dev, use technical language. For BA/PO/Tester/End User, use business
+language and omit classes, methods, controllers, repositories, SQL, and
+low-level implementation. If both audiences are requested, separate `Business
+Summary` and `Technical Implementation`.
 
-### Post-implementation assessment
-
-After implementation + validation + E2E, assess the completed feature from:
-- business/product consistency;
-- UX/workflow;
-- data consistency;
-- maintainability;
-- security/permissions;
-- auditability;
-- scalability/future constraints where relevant.
-
-Do not invent nice-to-have features.
-Only report evidence-backed observations materially related to the current scope.
-
-Recommendations are not automatically implementation scope.
+Do not hallucinate to fill a template. Use `Not applicable`, `Not verified`, or
+`Unknown from current scope`; say `No business behavior changed.` when true.
+Detailed means structurally complete and truthful, not padded.
 
 ### Workflow state reporting
 
-Controlled workflows report their own progress through the `cw` CLI so the
-monitor reflects reality:
+Controlled workflows report real transitions with `cw` as they occur. The CLI
+owns `<runtimeDir>/runs/**/state.json`; never edit it manually.
 
-```
-cw run start feature-change --label "<short task label>"
+```text
+cw run start <workflow> --label "<short label>"
 cw phase enter <node>
 cw phase complete
-cw gate wait BUSINESS_READY
-cw gate pass BUSINESS_READY
+cw phase skip <node> --message "<why it is not justified>"
+cw gate wait <GATE>
+cw gate pass <GATE>
+cw analysis ready --source "path[,path...]"
+cw analysis approve --solution "..." --scope "..."
+cw analysis handoff
+cw analysis freshness
 cw run complete
 ```
 
-Rules:
-- Never edit `.ai-workflow/runs/**/state.json` by hand. The CLI owns it.
-- Emit the transition when the phase actually starts or ends, not in a batch at
-  the end. Batching produces `SEMANTIC_LAG`: the monitor reports that Claude is
-  active while the diagram is frozen.
-- One task, one run. `cw run start` refuses to open a second run while one is
-  live. To continue a parked run just answer the question — the run resumes.
-  To retire one deliberately: `cw run abandon --message "<why>"`.
-- A gate is decided at the phase that owns it, and only once that phase's
-  declared artifact exists on disk as a non-empty file. `cw gate pass` refuses
-  otherwise and has no `--force`; `cw gate override <GATE> --reason "<why>"` is a
-  separate, audited command for a decision the user made outside the run.
-- Declared artifacts are enforced on leaving a phase: `cw phase complete` and the
-  next `cw phase enter` both refuse while one is missing or empty. Write the
-  file; `--allow-missing-artifacts --reason "<why>"` is an audited exception, not
-  a shortcut.
-- `cw run complete` is verified: all gates passed, all phases completed or
-  skipped, nothing waiting on the user, all required artifacts present. A run
-  that cannot finish is retired with `cw run abandon`, which is not success.
-- Another Claude session's run is not yours to steer. `cw phase`, `cw gate` and
-  `cw run complete/fail/abandon` are refused for a run owned by another session;
-  take it over deliberately with `cw run claim <runId> --force --reason "<why>"`.
-- If `cw` is unavailable, continue the engineering work normally and report the
-  missing CLI once in the final report. Monitoring is observability, not a gate.
-- `cw status` shows the active run, the open gates, whether mutation is
-  currently denied, and the legal next phases.
+One task has one active run. Continue a waiting run in place. Retire a run only
+deliberately with a reason. A phase's declared artifact must exist before it can
+be completed; an audited missing-artifact override is not a shortcut.
 
-### Internal step skills
+`cw run complete` verifies passed gates, completed or skipped phases, no open
+user wait, legal end reachability, and required artifacts. If `cw` is
+unavailable, continue the engineering work and report the missing observability
+once; monitoring is not a reason to block implementation.
 
-Skills named `wf-*` are steps inside a workflow, not conversations. They return
-their findings to the workflow that invoked them. They do not write a long
-report to the user; the only steps that address the user are the final report
-and an explicit blocking question.
+### Notify when a run needs the user
+
+`cw` only records state; it sends no notification. When a run parks for a human
+— a waiting gate, `ANALYSIS_READY`, or any `WAITING_USER` node — and when a
+long-running run completes, call `PushNotification` with the run id and the
+decision required. Skip it for work that finishes inside one short turn.
 
 ### Final response
 
-Keep final output compact:
-1. Result
-2. Implemented/fixed
-3. Key business/technical decisions
-4. Validation/E2E evidence
-5. Known limitations/remaining risk
-6. Follow-up recommendations, only if material
-
-Do not narrate the work history.
+Return the selected quick or detailed report only. Do not narrate the workflow.
+Make actual verification and anything not verified unmistakable.

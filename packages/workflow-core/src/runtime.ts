@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { loadWorkflow, loadWorkflows } from './loader.js';
 import * as sm from './state-machine.js';
 import { inspectConventions, type ConventionReport } from './conventions.js';
@@ -28,7 +30,9 @@ import {
 } from './store.js';
 import {
   DEFAULT_CONFIG,
+  SOLUTION_ANALYSIS_ARTIFACTS,
   isTerminalRun,
+  type SourceSnapshotEntry,
   type EventType,
   type InvalidArtifact,
   type KitConfig,
@@ -38,6 +42,9 @@ import {
   type WorkflowDefinition,
   type WorkflowEvent,
 } from './types.js';
+
+/** NFD combining marks: strips Vietnamese diacritics out of directory slugs. */
+const COMBINING_MARKS = new RegExp('[\\u0300-\\u036f]', 'g');
 
 export interface RuntimeOptions {
   projectRoot?: string;
@@ -52,6 +59,13 @@ export interface RuntimeOptions {
 
 const SEMANTIC_EVENTS = new Set<EventType>([
   'RUN_STARTED',
+  'RUN_ROUTED',
+  'RUN_ESCALATED',
+  'ANALYSIS_READY',
+  'ANALYSIS_APPROVED',
+  'ANALYSIS_HANDOFF',
+  'ANALYSIS_FRESHNESS',
+  'ANALYSIS_REFRESHED',
   'RUN_COMPLETED',
   'RUN_FAILED',
   'NODE_ENTER',
@@ -114,7 +128,25 @@ export class WorkflowRuntime {
   }
 
   run(runId: string): RunState {
-    return readRun(this.paths, runId);
+    return this.normaliseWorkflowAdditions(readRun(this.paths, runId));
+  }
+
+  /** Additive workflow nodes must not make a pre-upgrade run incomplete. */
+  private normaliseWorkflowAdditions(run: RunState): RunState {
+    if (run.workflow === 'feature-change' && !run.sourceAnalysisRunId) {
+      const freshness = run.nodes['freshness'];
+      if (!freshness) {
+        run.nodes['freshness'] = {
+          status: 'SKIPPED',
+          visits: 0,
+          finishedAt: run.startedAt,
+        };
+      } else if (freshness.status === 'PENDING') {
+        freshness.status = 'SKIPPED';
+        freshness.finishedAt = run.startedAt;
+      }
+    }
+    return run;
   }
 
   currentRunId(): string | undefined {
@@ -126,7 +158,8 @@ export class WorkflowRuntime {
   /** Throws RunStateCorruptError if the pointer targets an unreadable run. */
   currentRun(): RunState | undefined {
     const id = this.currentRunId();
-    return id ? tryReadRun(this.paths, id) : undefined;
+    const run = id ? tryReadRun(this.paths, id) : undefined;
+    return run ? this.normaliseWorkflowAdditions(run) : undefined;
   }
 
   /** The active run, or undefined when it is missing *or* unreadable. */
@@ -225,7 +258,8 @@ export class WorkflowRuntime {
     if (sessionId) {
       const bound = readSessions(this.paths)[sessionId];
       if (bound) {
-        const run = tryReadRun(this.paths, bound.runId);
+        const raw = tryReadRun(this.paths, bound.runId);
+        const run = raw ? this.normaliseWorkflowAdditions(raw) : undefined;
         if (run && !isTerminalRun(run.status)) return run;
       }
     }
@@ -363,7 +397,444 @@ export class WorkflowRuntime {
     return scanArtifacts(this.paths, runId).invalid;
   }
 
+  private sourceSnapshot(sources: string[]): SourceSnapshotEntry[] {
+    const seen = new Set<string>();
+    const snapshot: SourceSnapshotEntry[] = [];
+    for (const input of sources) {
+      const value = input.trim();
+      if (!value) continue;
+      const absolute = resolve(this.paths.projectRoot, value);
+      const rel = relative(this.paths.projectRoot, absolute);
+      if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+        throw new sm.TransitionError(`analysis source must be a project file: ${value}`);
+      }
+      const normalised = rel.replace(/\\/g, '/');
+      if (seen.has(normalised)) continue;
+      if (!existsSync(absolute) || !statSync(absolute).isFile()) {
+        throw new sm.TransitionError(`analysis source does not exist as a file: ${normalised}`);
+      }
+      seen.add(normalised);
+      snapshot.push({
+        path: normalised,
+        sha256: createHash('sha256').update(readFileSync(absolute)).digest('hex'),
+      });
+    }
+    if (!snapshot.length) {
+      throw new sm.TransitionError(
+        'analysis readiness requires at least one relevant source file: --source "path[,path...]"',
+      );
+    }
+    return snapshot;
+  }
+
+  private staleSnapshotPaths(snapshot: SourceSnapshotEntry[]): string[] {
+    const stale: string[] = [];
+    for (const entry of snapshot) {
+      const absolute = resolve(this.paths.projectRoot, entry.path);
+      const rel = relative(this.paths.projectRoot, absolute);
+      if (rel.startsWith('..') || isAbsolute(rel) || !existsSync(absolute) || !statSync(absolute).isFile()) {
+        stale.push(entry.path);
+        continue;
+      }
+      const current = createHash('sha256').update(readFileSync(absolute)).digest('hex');
+      if (current !== entry.sha256) stale.push(entry.path);
+    }
+    return stale;
+  }
+
+  /**
+   * Publish the validated analysis to a readable directory in the repository.
+   * Run evidence under `runs/<runId>/` stays canonical and machine-owned; this
+   * is the copy a human is expected to open, so it is written by `cw` rather
+   * than by a gated editor tool.
+   */
+  private publishAnalysisReport(run: RunState): string | undefined {
+    const dirName = this.config.analysisReportDir ?? DEFAULT_CONFIG.analysisReportDir;
+    if (!dirName.trim()) return undefined;
+    const slug = (run.label ?? '')
+      .normalize('NFD')
+      .replace(COMBINING_MARKS, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40);
+    const target = resolve(
+      this.paths.projectRoot,
+      dirName,
+      slug ? `${run.runId}-${slug}` : run.runId,
+    );
+    mkdirSync(target, { recursive: true });
+    for (const name of SOLUTION_ANALYSIS_ARTIFACTS) {
+      copyFileSync(join(this.paths.runDir(run.runId), name), join(target, name));
+    }
+    return relative(this.paths.projectRoot, target).replace(/\\/g, '/');
+  }
+
+  private assertSolutionAnalysisRun(run: RunState): void {
+    if (run.workflow !== 'solution-analysis') {
+      throw new sm.TransitionError(`run ${run.runId} is ${run.workflow}, not solution-analysis`);
+    }
+  }
+
+  /**
+   * Validate the six-file contract, capture the relevant-source fingerprint and
+   * park the run for explicit approval. No repository source is mutated.
+   */
+  markAnalysisReady(opts: { runId?: string; sources: string[] }): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'mark its analysis ready');
+    this.assertSolutionAnalysisRun(run);
+    if (run.currentNode !== 'analysis') {
+      throw new sm.TransitionError(
+        `analysis readiness is recorded from "analysis" (current node is "${run.currentNode}")`,
+      );
+    }
+    const valid = this.validArtifacts(run.runId);
+    const missing = SOLUTION_ANALYSIS_ARTIFACTS.filter((name) => !valid.includes(name));
+    if (missing.length) {
+      throw new sm.TransitionError(
+        `solution analysis is incomplete: missing or unusable ${missing.join(', ')} in ${this.paths.runDir(run.runId)}`,
+      );
+    }
+
+    const now = this.now();
+    const sourceSnapshot = this.sourceSnapshot(opts.sources);
+    const reportDir = this.publishAnalysisReport(run);
+    run.analysis = {
+      status: 'ANALYSIS_READY',
+      readyAt: now,
+      sourceSnapshot,
+      ...(reportDir ? { reportDir } : {}),
+    };
+    const def = this.workflow(run.workflow);
+    sm.completeNode(def, run, 'analysis', now);
+    this.record(run, 'NODE_COMPLETE', { node: 'analysis' });
+    sm.enterNode(def, run, 'approval', now);
+    this.record(run, 'NODE_ENTER', { node: 'approval' });
+    sm.waitGate(def, run, 'ANALYSIS_APPROVED', now);
+    this.record(run, 'GATE_WAIT', {
+      gate: 'ANALYSIS_APPROVED',
+      node: run.currentNode,
+      message: 'analysis ready; explicit solution and scope approval required',
+    });
+    this.record(run, 'ANALYSIS_READY', {
+      node: run.currentNode,
+      data: { sourceFiles: sourceSnapshot.map((entry) => entry.path) },
+    });
+    return this.persist(run);
+  }
+
+  /** Persist the explicit human decision and open the analysis handoff gate. */
+  approveAnalysis(
+    opts: { runId?: string; approvedSolution: string; approvedScope: string },
+  ): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'approve its analysis');
+    this.assertSolutionAnalysisRun(run);
+    if (run.analysis?.status !== 'ANALYSIS_READY') {
+      throw new sm.TransitionError(`run ${run.runId} is not ANALYSIS_READY`);
+    }
+    if (!opts.approvedSolution.trim() || !opts.approvedScope.trim()) {
+      throw new sm.TransitionError('analysis approval requires non-empty --solution and --scope');
+    }
+    const def = this.workflow(run.workflow);
+    const check = sm.checkGatePass(def, run, 'ANALYSIS_APPROVED', this.validArtifacts(run.runId));
+    if (!check.ok) throw new sm.TransitionError(check.reason ?? 'analysis approval gate cannot pass');
+    const now = this.now();
+    const approval = {
+      analysisRunId: run.runId,
+      approvedAt: now,
+      approvedSolution: opts.approvedSolution.trim(),
+      approvedScope: opts.approvedScope.trim(),
+    };
+    run.analysis = {
+      ...run.analysis,
+      status: 'APPROVED',
+      approval,
+    };
+    sm.passGate(def, run, 'ANALYSIS_APPROVED', now);
+    this.record(run, 'GATE_PASS', {
+      gate: 'ANALYSIS_APPROVED',
+      node: run.currentNode,
+      message: 'explicit solution and scope approval persisted',
+    });
+    this.record(run, 'ANALYSIS_APPROVED', {
+      node: run.currentNode,
+      data: {
+        analysisRunId: run.runId,
+        approvedAt: now,
+        approvedSolution: approval.approvedSolution,
+        approvedScope: approval.approvedScope,
+      },
+    });
+    return this.persist(run);
+  }
+
+  /**
+   * Finish an approved analysis run and create a linked feature-change run.
+   * Canonical artifacts are copied byte-for-byte; the run-id link remains the
+   * authority, so this is not a free-form prompt handoff.
+   */
+  handoffAnalysis(opts: { runId?: string; label?: string } = {}): RunState {
+    const analysis = this.resolveRun(opts.runId);
+    this.assertOwnership(analysis, 'handoff its analysis');
+    this.assertSolutionAnalysisRun(analysis);
+    if (analysis.analysis?.status !== 'APPROVED' || !analysis.analysis.approval) {
+      throw new sm.TransitionError(`run ${analysis.runId} needs explicit approval before handoff`);
+    }
+    const missing = SOLUTION_ANALYSIS_ARTIFACTS.filter(
+      (name) => !this.validArtifacts(analysis.runId).includes(name),
+    );
+    if (missing.length) {
+      throw new sm.TransitionError(`approved analysis lost required artifact(s): ${missing.join(', ')}`);
+    }
+
+    // Validate a project override before completing the source run. A stale
+    // custom feature topology remains usable in legacy mode and gets a safe
+    // doctor warning, but cannot silently accept an unsupported handoff.
+    const featureDef = this.workflow('feature-change');
+    if (!sm.findNode(featureDef, 'freshness') || !featureDef.edges.some((e) => e.from === 'prompt' && e.to === 'freshness')) {
+      throw new sm.TransitionError(
+        'feature-change does not expose the analysis freshness branch. Preserve the custom workflow and merge the new "freshness" node, or run claude-workflow-kit doctor.',
+      );
+    }
+    if (!sm.gatesOf(featureDef).includes('BUSINESS_READY')) {
+      throw new sm.TransitionError('feature-change handoff requires the existing BUSINESS_READY gate');
+    }
+
+    const analysisDef = this.workflow(analysis.workflow);
+    const now = this.now();
+    sm.enterNode(analysisDef, analysis, 'done', now);
+    const complete = sm.checkRunComplete(analysisDef, analysis, this.validArtifacts(analysis.runId));
+    if (!complete.ok) {
+      throw new sm.TransitionError(`approved analysis cannot finish: ${complete.reasons.join('; ')}`);
+    }
+    sm.completeRun(analysisDef, analysis, now);
+    this.record(analysis, 'RUN_COMPLETED', { node: analysis.currentNode });
+    this.persist(analysis);
+    this.unbindRun(analysis.runId);
+    if (this.currentRunId() === analysis.runId) writeCurrentRunId(this.paths, undefined);
+
+    const feature = this.startRun('feature-change', { label: opts.label ?? analysis.label });
+    feature.sourceAnalysisRunId = analysis.runId;
+    feature.analysisHandoff = {
+      sourceAnalysisRunId: analysis.runId,
+      freshness: 'UNCHECKED',
+    };
+
+    for (const name of SOLUTION_ANALYSIS_ARTIFACTS) {
+      copyFileSync(
+        resolve(this.paths.runDir(analysis.runId), name),
+        resolve(this.paths.runDir(feature.runId), name),
+      );
+    }
+    // Compatibility aliases let existing implementation/reviewer skills read
+    // their legacy filenames while canonical handoff files remain unchanged.
+    copyFileSync(
+      resolve(this.paths.runDir(feature.runId), 'recommended-solution.md'),
+      resolve(this.paths.runDir(feature.runId), 'business-decision.md'),
+    );
+    copyFileSync(
+      resolve(this.paths.runDir(feature.runId), 'impact-analysis.md'),
+      resolve(this.paths.runDir(feature.runId), 'impact-risk-scope.md'),
+    );
+
+    for (const nodeId of ['evidence', 'business', 'readiness']) {
+      const state = feature.nodes[nodeId];
+      if (!state) continue;
+      state.status = 'SKIPPED';
+      state.finishedAt = now;
+    }
+    sm.enterNode(featureDef, feature, 'freshness', now);
+    this.record(feature, 'NODE_ENTER', { node: 'freshness' });
+    this.record(feature, 'ANALYSIS_HANDOFF', {
+      node: 'freshness',
+      message: `feature-change linked to approved analysis ${analysis.runId}`,
+      data: { sourceAnalysisRunId: analysis.runId },
+    });
+    this.record(analysis, 'ANALYSIS_HANDOFF', {
+      node: analysis.currentNode,
+      message: `handed off to feature run ${feature.runId}`,
+      data: { featureRunId: feature.runId },
+    });
+    return this.persist(feature);
+  }
+
+  /** Compare the relevant-source hashes and inherit BUSINESS_READY only if valid. */
+  checkAnalysisFreshness(opts: { runId?: string } = {}): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'check its analysis freshness');
+    if (run.workflow !== 'feature-change' || !run.sourceAnalysisRunId || !run.analysisHandoff) {
+      throw new sm.TransitionError('analysis freshness applies only to a linked feature-change run');
+    }
+    if (run.currentNode !== 'freshness') {
+      throw new sm.TransitionError(`freshness is checked at "freshness" (current node is "${run.currentNode}")`);
+    }
+    const source = this.run(run.sourceAnalysisRunId);
+    if (source.analysis?.status !== 'APPROVED' || !source.analysis.approval) {
+      throw new sm.TransitionError(`source analysis ${source.runId} is no longer approved`);
+    }
+    const snapshot = run.analysisHandoff.sourceSnapshot ?? source.analysis.sourceSnapshot ?? [];
+    if (!snapshot.length) {
+      throw new sm.TransitionError(`source analysis ${source.runId} has no relevant-source snapshot`);
+    }
+    const stalePaths = this.staleSnapshotPaths(snapshot);
+    const now = this.now();
+    run.analysisHandoff.checkedAt = now;
+    if (stalePaths.length) {
+      run.analysisHandoff.freshness = 'STALE';
+      run.analysisHandoff.stalePaths = stalePaths;
+      run.gates['BUSINESS_READY'] = 'OPEN';
+      this.record(run, 'ANALYSIS_FRESHNESS', {
+        node: run.currentNode,
+        message: `STALE: ${stalePaths.join(', ')}`,
+        data: { status: 'STALE', stalePaths },
+      });
+      return this.persist(run);
+    }
+
+    run.analysisHandoff.freshness = 'VALID';
+    delete run.analysisHandoff.stalePaths;
+    run.gates['BUSINESS_READY'] = 'PASSED';
+    const provenance = run.gateProvenance ?? (run.gateProvenance = {});
+    provenance['BUSINESS_READY'] = {
+      decidedAtNode: 'freshness',
+      decidedAt: now,
+    };
+    this.record(run, 'GATE_PASS', {
+      gate: 'BUSINESS_READY',
+      node: run.currentNode,
+      message: `inherited from approved analysis ${source.runId}; source snapshot valid`,
+    });
+    this.record(run, 'ANALYSIS_FRESHNESS', {
+      node: run.currentNode,
+      message: 'VALID',
+      data: { status: 'VALID', sourceAnalysisRunId: source.runId },
+    });
+    return this.persist(run);
+  }
+
+  /** Record a targeted refresh baseline after stale artifacts were updated. */
+  refreshAnalysisHandoff(
+    opts: { runId?: string; sources: string[]; reason: string },
+  ): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'refresh its linked analysis');
+    if (run.workflow !== 'feature-change' || !run.analysisHandoff || run.currentNode !== 'freshness') {
+      throw new sm.TransitionError('analysis refresh applies only at a linked feature freshness phase');
+    }
+    if (!opts.reason.trim()) throw new sm.TransitionError('analysis refresh requires --reason');
+    const valid = this.validArtifacts(run.runId);
+    const missing = SOLUTION_ANALYSIS_ARTIFACTS.filter((name) => !valid.includes(name));
+    if (missing.length) throw new sm.TransitionError(`cannot refresh: missing ${missing.join(', ')}`);
+    copyFileSync(
+      resolve(this.paths.runDir(run.runId), 'recommended-solution.md'),
+      resolve(this.paths.runDir(run.runId), 'business-decision.md'),
+    );
+    copyFileSync(
+      resolve(this.paths.runDir(run.runId), 'impact-analysis.md'),
+      resolve(this.paths.runDir(run.runId), 'impact-risk-scope.md'),
+    );
+    const now = this.now();
+    run.analysisHandoff.sourceSnapshot = this.sourceSnapshot(opts.sources);
+    run.analysisHandoff.freshness = 'UNCHECKED';
+    run.analysisHandoff.refreshedAt = now;
+    run.analysisHandoff.refreshReason = opts.reason.trim();
+    delete run.analysisHandoff.checkedAt;
+    delete run.analysisHandoff.stalePaths;
+    run.gates['BUSINESS_READY'] = 'OPEN';
+    this.record(run, 'ANALYSIS_REFRESHED', {
+      node: run.currentNode,
+      message: opts.reason.trim(),
+      data: { sourceFiles: run.analysisHandoff.sourceSnapshot.map((entry) => entry.path) },
+    });
+    return this.persist(run);
+  }
+
+  private assertFreshHandoffBeforeLeaving(run: RunState, leaving: string, target?: string): void {
+    if (
+      run.workflow === 'feature-change' &&
+      run.sourceAnalysisRunId &&
+      leaving === 'freshness' &&
+      target !== 'freshness' &&
+      run.analysisHandoff?.freshness !== 'VALID'
+    ) {
+      const stale = run.analysisHandoff?.stalePaths?.join(', ');
+      throw new sm.TransitionError(
+        `approved analysis is ${run.analysisHandoff?.freshness ?? 'UNCHECKED'}${stale ? ` (${stale})` : ''}; ` +
+          'refresh affected analysis artifacts and rerun cw analysis freshness before implementation',
+      );
+    }
+  }
+
   // ---- semantic transitions -------------------------------------------------
+
+  /**
+   * Promote a generic prompt or raise the workflow level without replacing the
+   * task run. The run id, evidence directory, owner, runtime telemetry, and
+   * event log stay intact; only the active topology is replaced and any
+   * stricter gates start OPEN.
+   */
+  escalateRun(
+    workflowId: string,
+    opts: { runId?: string; reason: string; label?: string },
+  ): RunState {
+    const current = this.resolveRun(opts.runId);
+    this.assertOwnership(current, 'escalate it');
+    if (isTerminalRun(current.status)) {
+      throw new sm.TransitionError(
+        `run ${current.runId} is already ${current.status} and cannot be escalated`,
+      );
+    }
+    if (!opts.reason.trim()) {
+      throw new sm.TransitionError('cw run escalate requires --reason "<concrete finding>"');
+    }
+
+    const allowed: Record<string, string[]> = {
+      'quick-fix': ['standard-change', 'bug-fix', 'feature-change'],
+      'standard-change': ['bug-fix', 'feature-change'],
+    };
+    const permitted = current.workflow === 'generic'
+      ? workflowId !== 'generic'
+      : allowed[current.workflow]?.includes(workflowId) === true;
+    if (!permitted) {
+      const targets = current.workflow === 'generic'
+        ? 'any concrete workflow'
+        : allowed[current.workflow]?.join(', ') || '(none)';
+      throw new sm.TransitionError(
+        `cannot escalate ${current.workflow} -> ${workflowId}; allowed: ${targets}`,
+      );
+    }
+
+    const previousWorkflow = current.workflow;
+    const now = this.now();
+    const next = sm.initialRunState(
+      this.workflow(workflowId),
+      current.runId,
+      now,
+      opts.label ?? current.label,
+    );
+    if (workflowId === 'feature-change' && next.nodes['freshness']) {
+      next.nodes['freshness']!.status = 'SKIPPED';
+      next.nodes['freshness']!.finishedAt = now;
+    }
+    next.startedAt = current.startedAt;
+    next.ownerSessionId = current.ownerSessionId;
+    next.runtime = { ...current.runtime };
+    next.agents = { ...current.agents };
+    next.artifacts = [...current.artifacts];
+    if (current.invalidArtifacts?.length) next.invalidArtifacts = [...current.invalidArtifacts];
+    if (current.lastRuntimeAt) next.lastRuntimeAt = current.lastRuntimeAt;
+
+    writeRun(this.paths, next);
+    writeCurrentRunId(this.paths, next.runId);
+    this.record(next, previousWorkflow === 'generic' ? 'RUN_ROUTED' : 'RUN_ESCALATED', {
+      node: next.currentNode,
+      message: `${previousWorkflow} -> ${workflowId}: ${opts.reason}`,
+      data: { fromWorkflow: previousWorkflow, toWorkflow: workflowId },
+    });
+    return this.persist(next);
+  }
 
   /**
    * Opening a second run while one is live is how evidence gets orphaned: the
@@ -404,6 +875,22 @@ export class WorkflowRuntime {
     }
 
     const blocking = this.activeRuns();
+    // UserPromptSubmit opens a lightweight generic run before a routed skill is
+    // selected. Promote that same task in place so `cw run start <workflow>` is
+    // compatible with the hook and never creates an abandoned shell run.
+    if (
+      !opts.force &&
+      !opts.runId &&
+      workflowId !== 'generic' &&
+      blocking.length === 1 &&
+      blocking[0]!.workflow === 'generic'
+    ) {
+      return this.escalateRun(workflowId, {
+        runId: blocking[0]!.runId,
+        reason: `classified active prompt as ${workflowId}`,
+        ...(opts.label ? { label: opts.label } : {}),
+      });
+    }
     if (blocking.length && !opts.force) {
       const list = blocking
         .map((r) => `${r.runId} (${r.workflow}, ${r.status}${r.label ? `, "${r.label}"` : ''})`)
@@ -441,6 +928,10 @@ export class WorkflowRuntime {
     const now = this.now();
     const runId = opts.runId ?? nextRunId(this.paths, workflowId, this.clock());
     const run = sm.initialRunState(def, runId, now, opts.label);
+    if (workflowId === 'feature-change' && run.nodes['freshness']) {
+      run.nodes['freshness']!.status = 'SKIPPED';
+      run.nodes['freshness']!.finishedAt = now;
+    }
     if (opts.sessionId) run.ownerSessionId = opts.sessionId;
     writeRun(this.paths, run);
     writeCurrentRunId(this.paths, runId);
@@ -568,6 +1059,7 @@ export class WorkflowRuntime {
     this.assertOwnership(run, 'change its phase');
     const def = this.workflow(run.workflow);
     if (nodeId !== run.currentNode) {
+      this.assertFreshHandoffBeforeLeaving(run, run.currentNode, nodeId);
       // An illegal edge is reported before a missing artifact: they need
       // different fixes and the graph problem is the more fundamental one.
       if (!opts.force) {
@@ -610,6 +1102,7 @@ export class WorkflowRuntime {
     this.assertOwnership(run, 'complete its phases');
     const def = this.workflow(run.workflow);
     const target = nodeId ?? run.currentNode;
+    this.assertFreshHandoffBeforeLeaving(run, target);
     const contract: { allowMissing?: boolean; reason?: string } = {};
     if (opts.allowMissingArtifacts) contract.allowMissing = true;
     if (opts.reason) contract.reason = opts.reason;
@@ -625,6 +1118,7 @@ export class WorkflowRuntime {
   skipPhase(nodeId: string, opts: { runId?: string; message?: string } = {}): RunState {
     const run = this.resolveRun(opts.runId);
     this.assertOwnership(run, 'skip its phases');
+    this.assertFreshHandoffBeforeLeaving(run, nodeId);
     const def = this.workflow(run.workflow);
     sm.skipNode(def, run, nodeId, this.now());
     const extra: Partial<WorkflowEvent> = { node: nodeId };

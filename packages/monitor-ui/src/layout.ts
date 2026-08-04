@@ -1,4 +1,4 @@
-import type { WorkflowDefinition } from './types';
+import type { WorkflowDefinition } from './types.js';
 
 export const NODE_WIDTH = 240;
 export const NODE_HEIGHT = 96;
@@ -16,7 +16,7 @@ export interface Placed {
  * Layered top-down placement derived from the workflow definition. BFS from the
  * start node gives each node its first-reached rank, so review/retry back edges
  * do not distort the layout. Waiting nodes are parked in a side column next to
- * the gate they belong to.
+ * the gate they belong to, or beside the incoming phase for an advisory wait.
  */
 export function layout(def: WorkflowDefinition): Map<string, Placed> {
   const start = def.nodes.find((n) => n.kind === 'start')?.id ?? def.nodes[0]?.id;
@@ -68,8 +68,14 @@ export function layout(def: WorkflowDefinition): Map<string, Placed> {
   // Waiting node sits beside its gate owner, one rank down.
   for (const id of waiting) {
     const node = def.nodes.find((n) => n.id === id)!;
-    const owner = def.nodes.find((n) => n.kind !== 'waiting' && n.gate === node.gate);
-    const anchor = owner ? placed.get(owner.id) : undefined;
+    const owner = node.gate
+      ? def.nodes.find((n) => n.kind !== 'waiting' && n.gate === node.gate)
+      : undefined;
+    const predecessor = !owner
+      ? def.edges.map((edge) => edge.to === id ? edge.from : undefined)
+          .find((candidate): candidate is string => Boolean(candidate && placed.has(candidate)))
+      : undefined;
+    const anchor = owner ? placed.get(owner.id) : predecessor ? placed.get(predecessor) : undefined;
     const r = anchor ? anchor.rank : rank.get(id)!;
     placed.set(id, {
       id,

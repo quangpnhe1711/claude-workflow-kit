@@ -1,0 +1,69 @@
+id: solution-analysis
+label: Solution Analysis
+description: >-
+  Analysis-only workflow. Parse free-form requirements, reconcile business
+  behavior with the current source, measure impact, compare solutions, produce
+  the six-file handoff contract, and stop for explicit approval. This workflow
+  never mutates product source and never starts feature-change automatically.
+
+nodes:
+  - id: prompt
+    label: User Input
+    kind: start
+    description: Free-form requirement and any supplied evidence.
+
+  - id: intake
+    label: Smart Intake
+    skill: wf-solution-analysis
+    description: >-
+      Parse goal, business behavior, scope, constraints, acceptance criteria,
+      open questions, and assumptions. Ask only about a material decision.
+
+  - id: analysis
+    label: Business / Source / Impact / Solution
+    skill: wf-solution-analysis
+    artifacts:
+      - business-analysis.md
+      - impact-analysis.md
+      - solution-options.md
+      - recommended-solution.md
+      - implementation-plan.md
+      - test-strategy.md
+    description: >-
+      Read-only source and convention analysis, impact discovery, solution
+      comparison, recommendation, implementation plan, and test strategy.
+
+  - id: approval
+    label: Analysis Approval
+    skill: wf-solution-analysis
+    gate: ANALYSIS_APPROVED
+    description: Persist explicit approval of the chosen solution and scope.
+
+  - id: await-approval
+    label: Waiting For Approval
+    kind: waiting
+    gate: ANALYSIS_APPROVED
+    description: ANALYSIS_READY. No implementation may start without explicit approval.
+
+  - id: done
+    label: Analysis Handed Off
+    kind: end
+
+edges:
+  - from: prompt
+    to: intake
+  - from: intake
+    to: analysis
+  - from: analysis
+    to: approval
+  - from: approval
+    to: await-approval
+    when: "!ANALYSIS_APPROVED"
+    label: explicit approval required
+  - from: await-approval
+    to: approval
+    label: approved
+  - from: approval
+    to: done
+    when: ANALYSIS_APPROVED
+    label: handoff requested

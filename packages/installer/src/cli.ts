@@ -75,6 +75,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       );
       for (const file of result.written) process.stdout.write(`  + ${rel(file)}\n`);
       for (const item of result.skipped) process.stdout.write(`  ~ skipped ${item}\n`);
+      for (const item of result.conflicts) process.stdout.write(`  ! preserved conflict ${item}\n`);
       for (const file of result.backups) process.stdout.write(`  backup ${rel(file)}\n`);
       process.stdout.write(
         `\nNext:\n  cw monitor            live workflow diagram on http://127.0.0.1:${result.config.monitorPort}\n  claude-workflow-kit doctor\n  /refresh-conventions  bootstrap repository conventions (inside Claude Code)\n`,

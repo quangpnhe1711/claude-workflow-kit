@@ -269,10 +269,18 @@ export function evaluateCommand(command: string, config: PolicyConfig): CommandV
 // ---- semantic `cw` commands ------------------------------------------------
 
 /** `cw` subcommands that change workflow state rather than reporting it. */
-const SEMANTIC_CW = new Set(['phase', 'gate', 'note', 'artifact']);
-// `start` is here because `cw run start <x> --force` retires the run whose gate
-// is currently closed — which is a way to leave someone else's gate behind.
-const SEMANTIC_RUN_SUBS = new Set(['complete', 'fail', 'abandon', 'transfer', 'quarantine-current', 'start']);
+const SEMANTIC_CW = new Set(['phase', 'gate', 'note', 'artifact', 'analysis']);
+// `start` is here because it either promotes the prompt's generic run or, with
+// `--force`, retires a run whose gate may still be closed. Both change state.
+const SEMANTIC_RUN_SUBS = new Set([
+  'complete',
+  'fail',
+  'abandon',
+  'transfer',
+  'quarantine-current',
+  'start',
+  'escalate',
+]);
 
 export interface CwCommandRef {
   /** The `cw` invocation mutates workflow state. */

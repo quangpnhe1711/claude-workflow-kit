@@ -1,11 +1,19 @@
 ---
 name: wf-feature-change
-description: Controlled feature/change workflow body. Reconcile evidence, resolve business behavior behind the BUSINESS_READY gate, plan impact/risk/scope/tests, reuse conventions, implement, validate, E2E, independent review, product assessment, compact report. Invoked by the feature-change and work entry skills.
+description: Full LEVEL 3 feature/change workflow body. Reconcile evidence, resolve material business behavior behind the BUSINESS_READY gate, plan high-risk impact/scope/tests, reuse conventions, implement, validate proportionally, conditionally run E2E, independently review, assess, and report at the user-requested depth.
 user-invocable: false
 effort: high
 ---
 
 Execute this workflow for the task passed in by the caller.
+
+If `cw status --json` shows an active `feature-change` with
+`sourceAnalysisRunId`, invoke `wf-feature-from-analysis` and return. Do not enter
+evidence/business/readiness or rerun solution analysis for a linked handoff.
+
+This is the full path for LEVEL 3 risk. If the task is L0-L2, return it to
+`wf-quick-fix` or `wf-standard-change` rather than
+running this phase stack.
 
 Report every phase transition with `cw` as it happens. The CLI owns run state;
 never edit `state.json`. If `cw` is unavailable, continue the engineering work
@@ -20,11 +28,14 @@ Open the run first:
 
 ```
 cw run start feature-change --label "<short task label>"
+cw note "Level: L3 — High risk"
 ```
 
-If that fails because another run is active, do not start a second one. Read
-`cw status`. Either continue that run, finish it, or retire it deliberately with
-`cw run abandon --message "<why>"`.
+If the active run is already `feature-change` because L1/L2 escalated in place,
+keep that run and do not call `cw run start` again. Continue with the first
+required L3 phase and reuse the findings already recorded in the event log. If
+a different run is active, do not start a second one. Read `cw status`; continue
+or finish that task, or retire it only when the task itself is withdrawn.
 
 ## Phase 0 — Ingest evidence
 Inputs may include:
@@ -60,7 +71,7 @@ Do not silently prefer documents over code, or code over documents.
 Invoke `wf-business-decision` using the reconciled evidence.
 
 Produce a resolved business specification and persist it to
-`.ai-workflow/runs/<runId>/business-decision.md`.
+`<runtimeDir>/runs/<runId>/business-decision.md`.
 
 **HARD GATE:** file mutation is denied by the hook until `BUSINESS_READY` passes.
 `cw gate pass BUSINESS_READY` is refused unless the current phase is `business`
@@ -101,7 +112,7 @@ Keep backward compatibility unless the resolved decision explicitly changes it.
 
 `cw phase complete`
 
-## Phase 6 — Validate + E2E
+## Phase 6 — Validate; decide E2E from risk
 `cw phase enter validation`
 
 Invoke `wf-validation-e2e`.
@@ -109,8 +120,16 @@ Invoke `wf-validation-e2e`.
 Validate against the resolved business specification and the pre-defined test
 strategy, not against implementation details alone.
 
-`cw phase complete`, then `cw phase enter e2e` for runtime/end-to-end
-verification, then `cw phase complete`.
+After targeted/integration validation, decide whether E2E materially reduces a
+remaining risk. Run it for a critical real journey or cross-layer gap that
+lower-level checks cannot cover. Do not run it merely because this is L3.
+
+- Justified: `cw phase complete`, `cw phase enter e2e`, run the scenario, then
+  `cw phase complete`.
+- Not justified: record why, `cw phase complete`, then
+  `cw phase skip e2e --message "<why targeted/integration/manual evidence is sufficient>"`.
+
+The graph permits either path into review.
 
 ## Phase 7 — Independent review
 `cw phase enter review`
@@ -119,7 +138,7 @@ Delegate to the `independent-reviewer` agent using the input contract in
 `wf-implement` → *Independent review handoff*: pass the run artifact directory
 and where to find the diff. Do not pass your own summary of the change.
 
-Write the verdict to `.ai-workflow/runs/<runId>/review.md`, then
+Write the verdict to `<runtimeDir>/runs/<runId>/review.md`, then
 `cw artifact review.md`.
 
 Fix task-related correctness findings, rerun impacted validation, and review
@@ -139,9 +158,9 @@ Recommendations remain separate tasks unless required for correctness.
 ## Phase 9 — Final report
 `cw phase enter report`
 
-Invoke `wf-final-report`. This is the only step that addresses the user at
-length. Return concise outcome/evidence/risks/recommendations. No execution
-diary.
+Invoke `wf-final-report`. It returns a quick report unless the original request
+explicitly asked for a detailed report/document, in which case it reuses the
+matching standardized template and audience. No execution diary.
 
 ```
 cw phase complete

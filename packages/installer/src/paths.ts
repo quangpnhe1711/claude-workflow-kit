@@ -11,6 +11,7 @@ export interface Preset {
   description: string;
   workflows: string[];
   skills: string[];
+  templates?: string[];
   agents: string[];
   claudeMd: string;
   dir: string;

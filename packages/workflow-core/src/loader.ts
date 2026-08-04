@@ -56,12 +56,22 @@ export function parseWorkflow(source: string, origin: string): WorkflowDefinitio
   const nodes: WorkflowNode[] = rawNodes.map((n, i) => {
     const o = n as Record<string, unknown>;
     const nodeId = asString(o['id'], `${origin}: nodes[${i}].id`);
+    const advisory = o['advisory'];
+    if (advisory !== undefined && typeof advisory !== 'boolean') {
+      throw new WorkflowDefinitionError(`${origin}: nodes[${i}].advisory must be a boolean`);
+    }
+    const defaultSkipped = o['defaultSkipped'];
+    if (defaultSkipped !== undefined && typeof defaultSkipped !== 'boolean') {
+      throw new WorkflowDefinitionError(`${origin}: nodes[${i}].defaultSkipped must be a boolean`);
+    }
     return {
       id: nodeId,
       label: typeof o['label'] === 'string' ? o['label'] : nodeId,
       kind: (o['kind'] as WorkflowNode['kind']) ?? 'phase',
       description: o['description'] as string | undefined,
       gate: o['gate'] as string | undefined,
+      advisory: advisory as boolean | undefined,
+      defaultSkipped: defaultSkipped as boolean | undefined,
       skill: o['skill'] as string | undefined,
       agent: o['agent'] as string | undefined,
       artifacts: parseArtifacts(o, `${origin}: nodes[${i}]`),
@@ -75,8 +85,25 @@ export function parseWorkflow(source: string, origin: string): WorkflowDefinitio
     if (!['start', 'phase', 'waiting', 'end'].includes(n.kind)) {
       throw new WorkflowDefinitionError(`${origin}: node "${n.id}" has unknown kind "${n.kind}"`);
     }
-    if (n.kind === 'waiting' && !n.gate) {
-      throw new WorkflowDefinitionError(`${origin}: waiting node "${n.id}" must declare a gate`);
+    if (n.kind === 'waiting' && !n.gate && n.advisory !== true) {
+      throw new WorkflowDefinitionError(
+        `${origin}: waiting node "${n.id}" requires a gate or advisory: true`,
+      );
+    }
+    if (n.kind === 'waiting' && n.gate && n.advisory === true) {
+      throw new WorkflowDefinitionError(
+        `${origin}: waiting node "${n.id}" cannot declare both gate and advisory: true`,
+      );
+    }
+    if (n.kind !== 'waiting' && n.advisory !== undefined) {
+      throw new WorkflowDefinitionError(
+        `${origin}: only waiting nodes may declare advisory`,
+      );
+    }
+    if (n.defaultSkipped === true && n.kind !== 'phase') {
+      throw new WorkflowDefinitionError(
+        `${origin}: only phase nodes may declare defaultSkipped`,
+      );
     }
   }
 

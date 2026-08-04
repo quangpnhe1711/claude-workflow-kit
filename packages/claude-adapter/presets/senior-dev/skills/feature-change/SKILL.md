@@ -1,13 +1,25 @@
 ---
 name: feature-change
-description: Execute the controlled feature/change workflow for requirement, design, database or code inputs that may conflict or be outdated. Reconcile evidence, obtain a clear business decision, plan impact/risk/scope/tests, reuse conventions, implement, validate E2E, review, assess product issues, and report.
+description: Execute a requested feature or behavior change using risk-adaptive L0-L3 routing. Small explicit changes use the fast path, bounded multi-layer changes use the medium path, and only high-risk changes use the full controlled feature workflow.
 disable-model-invocation: true
-argument-hint: "[desired outcome + requirement/design/DB/code inputs]"
-effort: high
+argument-hint: "[desired outcome + relevant inputs]"
+effort: medium
 ---
 
-Invoke `wf-feature-change` and execute it for `$ARGUMENTS`.
+Classify `$ARGUMENTS` before execution using the L0-L3 definitions in the
+installed engineering rules.
 
-This entry point exists so the full workflow is only started when the user asks
-for it. The workflow body lives in `wf-feature-change` so that `work` can route
-to the same body without going through a user-only skill.
+If the arguments explicitly reference an approved analysis run, or the current
+feature run has `sourceAnalysisRunId`, invoke `wf-feature-from-analysis` instead
+of reclassifying or repeating discovery.
+
+- L0-L1 -> invoke `wf-quick-fix`.
+- L2 -> invoke `wf-standard-change`.
+- L3 -> invoke `wf-feature-change`.
+
+Choosing `/feature-change` identifies the request as a change, not as automatic
+consent to every full-workflow phase. Reserve the hard-gated body for concrete
+high-risk factors. A command name does not override risk classification.
+
+Pass the original arguments and the classification to the selected body. Do not
+start a run here and do not invoke more than one body.

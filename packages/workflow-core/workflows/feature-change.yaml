@@ -3,7 +3,8 @@ label: Feature Change
 description: >-
   Controlled feature/change workflow. Reconcile evidence, resolve business
   behavior behind a hard gate, plan impact/risk/scope/tests, implement,
-  validate, review independently, assess, report.
+  validate proportionally, review independently, assess, report. This full
+  workflow is reserved for LEVEL 3 risk; E2E is conditional, not automatic.
 
 nodes:
   - id: prompt
@@ -16,6 +17,22 @@ nodes:
     skill: wf-evidence-reconciliation
     artifact: evidence.md
     description: Reconcile intent, requirement documents, DB, code and tests. Surface contradictions.
+
+  - id: freshness
+    label: Analysis Freshness
+    defaultSkipped: true
+    skill: wf-feature-from-analysis
+    artifacts:
+      - business-analysis.md
+      - impact-analysis.md
+      - solution-options.md
+      - recommended-solution.md
+      - implementation-plan.md
+      - test-strategy.md
+    description: >-
+      Linked-analysis path only. Verify relevant source hashes and reuse the
+      approved artifact package. If stale, refresh only affected analysis and
+      keep BUSINESS_READY closed. Legacy feature runs do not enter this node.
 
   - id: business
     label: Business Decision
@@ -58,7 +75,9 @@ nodes:
   - id: e2e
     label: E2E
     skill: wf-validation-e2e
-    description: Runtime/end-to-end verification of the real flow where feasible.
+    description: >-
+      Runtime/end-to-end verification only when the risk and remaining coverage
+      gap justify it. Otherwise mark this phase skipped with the reason.
 
   - id: review
     label: Independent Review
@@ -85,6 +104,13 @@ nodes:
 edges:
   - from: prompt
     to: evidence
+    label: legacy / direct feature request
+  - from: prompt
+    to: freshness
+    label: approved analysis handoff
+  - from: freshness
+    to: conventions
+    label: analysis valid
   - from: evidence
     to: business
   - from: business
@@ -106,6 +132,10 @@ edges:
     to: validation
   - from: validation
     to: e2e
+    label: E2E justified
+  - from: validation
+    to: review
+    label: E2E not justified
   - from: e2e
     to: review
   - from: review

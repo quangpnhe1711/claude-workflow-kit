@@ -193,6 +193,8 @@ test('classifyCwCommand separates reporting from state changes', () => {
   assert.equal(classifyCwCommand('cw gate pass BUSINESS_READY')?.semantic, true);
   assert.equal(classifyCwCommand('cw run complete')?.semantic, true);
   assert.equal(classifyCwCommand('cw run abandon --run fc-1')?.runId, 'fc-1');
+  assert.equal(classifyCwCommand('cw run escalate feature-change --reason risk')?.semantic, true);
+  assert.equal(classifyCwCommand('cw analysis approve --solution A --scope B')?.semantic, true);
   assert.equal(classifyCwCommand('cw note "x" --run=fc-2')?.runId, 'fc-2');
 });
 

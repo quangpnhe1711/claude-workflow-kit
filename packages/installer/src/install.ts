@@ -1,4 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, relative, resolve } from 'node:path';
 import { DEFAULT_CONFIG, resolveRuntimeDirName, type KitConfig } from '@claude-workflow-kit/workflow-core';
 import {
@@ -36,12 +37,16 @@ export interface InstallManifest {
   preset: string;
   installedAt: string;
   files: string[];
+  /** Hash written by the installer. Missing on legacy manifests. */
+  fileHashes?: Record<string, string>;
 }
 
 export interface InstallResult {
   written: string[];
   skipped: string[];
   backups: string[];
+  /** Existing project-owned/customized files preserved instead of overwritten. */
+  conflicts: string[];
   manifest: InstallManifest;
   config: KitConfig;
   projectRoot: string;
@@ -61,6 +66,10 @@ function copy(result: InstallResult, from: string, to: string, dryRun: boolean):
   copyFileSync(from, to);
 }
 
+function fileHash(file: string): string {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
+}
+
 const RUNTIME_README = `# claude-workflow-kit runtime
 
 Everything here is runtime data for this project. The toolkit itself lives in
@@ -68,6 +77,7 @@ the \`claude-workflow-kit\` package, not in this directory.
 
 - \`config.json\` — runtime settings (monitor port, stall threshold, paths).
 - \`conventions/\` — persisted repository conventions, reused across tasks.
+- \`templates/\` — report, optional intake, and solution-analysis artifact templates.
 - \`runs/<run-id>/\` — one controlled workflow run: \`state.json\`,
   \`events.jsonl\` and the evidence artifacts the workflow produced.
 - \`current-run\` — id of the active run, so a follow-up prompt continues it.
@@ -79,8 +89,9 @@ the \`claude-workflow-kit\` package, not in this directory.
 
 State is owned by the \`cw\` CLI. Do not hand-edit \`state.json\`.
 
-Commit \`conventions/\` — that is shared repository knowledge. Everything else
-here is machine-local and is gitignored by the installed \`.gitignore\`;
+Commit \`conventions/\` and \`templates/\` — they are shared repository knowledge
+and reusable reporting structure. Runtime/run state is machine-local and is
+gitignored by the installed \`.gitignore\`;
 \`config.json\` in particular holds an absolute \`runtimeUrl\` for this machine.
 `;
 
@@ -109,6 +120,7 @@ export function install(options: InstallOptions): InstallResult {
   const existingConfig = readJsonFile<KitConfig>(join(projectRoot, runtimeDirName, 'config.json'));
   const runtimeDir = join(projectRoot, runtimeDirName);
   const claudeDir = join(projectRoot, '.claude');
+  const previousManifest = readJsonFile<InstallManifest>(join(runtimeDir, 'installed.json'));
 
   const config: KitConfig = {
     ...DEFAULT_CONFIG,
@@ -124,18 +136,58 @@ export function install(options: InstallOptions): InstallResult {
     written: [],
     skipped: [],
     backups: [],
-    manifest: { version: kitVersion(), preset: preset.id, installedAt: new Date().toISOString(), files: [] },
+    conflicts: [],
+    manifest: {
+      version: kitVersion(),
+      preset: preset.id,
+      installedAt: new Date().toISOString(),
+      files: [],
+      fileHashes: {},
+    },
     config,
     projectRoot,
+  };
+
+  const managedCopy = (from: string, to: string, label: string): void => {
+    const rel = relative(projectRoot, to).replace(/\\/g, '/');
+    const sourceHash = fileHash(from);
+    if (existsSync(to)) {
+      const currentHash = fileHash(to);
+      const previousHash = previousManifest?.fileHashes?.[rel];
+      const wasManaged = previousManifest?.files.includes(rel) === true;
+      if (currentHash === sourceHash) {
+        result.skipped.push(`${label} (already current)`);
+      } else if (!previousHash || currentHash !== previousHash) {
+        const ownership = wasManaged && !previousHash
+          ? 'legacy ownership cannot be proven'
+          : wasManaged
+            ? 'customized after install'
+            : 'project-owned';
+        result.skipped.push(`${label} (${ownership}; preserved)`);
+        result.conflicts.push(`${rel}: ${ownership}; merge the packaged update manually`);
+        return;
+      } else {
+        copy(result, from, to, dryRun);
+      }
+    } else {
+      copy(result, from, to, dryRun);
+    }
+    result.manifest.files.push(rel);
+    result.manifest.fileHashes![rel] = sourceHash;
   };
 
   // --- runtime directory ---
   if (!dryRun) {
     mkdirSync(join(runtimeDir, 'runs'), { recursive: true });
     mkdirSync(join(runtimeDir, 'conventions'), { recursive: true });
+    mkdirSync(join(runtimeDir, 'templates'), { recursive: true });
   }
   write(result, join(runtimeDir, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, dryRun);
-  write(result, join(runtimeDir, 'README.md'), RUNTIME_README, dryRun);
+  if (!existsSync(join(runtimeDir, 'README.md'))) {
+    write(result, join(runtimeDir, 'README.md'), RUNTIME_README, dryRun);
+  } else {
+    result.skipped.push('runtime README.md (existing project file preserved)');
+  }
   if (!existsSync(join(runtimeDir, 'runs', '.gitignore'))) {
     write(result, join(runtimeDir, 'runs', '.gitignore'), RUNS_GITIGNORE, dryRun);
   }
@@ -151,8 +203,22 @@ export function install(options: InstallOptions): InstallResult {
       continue;
     }
     const to = join(claudeDir, 'skills', skill, 'SKILL.md');
+    managedCopy(from, to, `skill ${skill}`);
+  }
+
+  // --- standardized report templates ---
+  for (const template of preset.templates ?? []) {
+    const from = join(preset.dir, 'templates', template);
+    if (!existsSync(from)) {
+      result.skipped.push(`template ${template} (missing in preset)`);
+      continue;
+    }
+    const to = join(runtimeDir, 'templates', template);
+    if (existsSync(to)) {
+      result.skipped.push(`template ${template} (existing project template reused)`);
+      continue;
+    }
     copy(result, from, to, dryRun);
-    result.manifest.files.push(relative(projectRoot, to).replace(/\\/g, '/'));
   }
 
   for (const agent of preset.agents) {
@@ -162,15 +228,13 @@ export function install(options: InstallOptions): InstallResult {
       continue;
     }
     const to = join(claudeDir, 'agents', `${agent}.md`);
-    copy(result, from, to, dryRun);
-    result.manifest.files.push(relative(projectRoot, to).replace(/\\/g, '/'));
+    managedCopy(from, to, `agent ${agent}`);
   }
 
   // --- hooks ---
   if (options.hooks !== false) {
     const to = join(claudeDir, 'hooks', 'cw-hook.mjs');
-    copy(result, hookSourceFile(), to, dryRun);
-    result.manifest.files.push(relative(projectRoot, to).replace(/\\/g, '/'));
+    managedCopy(hookSourceFile(), to, 'hook script');
 
     // The hook, `cw` from a skill, doctor and the monitor all start with no
     // flags. A non-default `--runtime <dir>` has to be discoverable, or the hook
@@ -275,7 +339,7 @@ export function uninstall(options: UninstallOptions): UninstallResult {
     removed.push(runtimeDir);
     if (!dryRun) rmSync(runtimeDir, { recursive: true, force: true });
   } else if (existsSync(runtimeDir)) {
-    kept.push(`${runtimeDir} (run evidence and conventions; use --purge to delete)`);
+    kept.push(`${runtimeDir} (run evidence, conventions, and report templates; use --purge to delete)`);
   }
 
   return { removed, kept };

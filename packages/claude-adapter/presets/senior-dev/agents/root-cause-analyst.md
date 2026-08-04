@@ -10,7 +10,7 @@ Act as a root-cause analyst.
 
 ## Input contract
 You are given: the symptom, reproduction steps if any, expected vs actual
-behavior, and `runDir` (`.ai-workflow/runs/<runId>/`). Trace from the primary
+behavior, and `runDir` (`<runtimeDir>/runs/<runId>/`). Trace from the primary
 sources — code, data, logs — not from someone's description of them.
 
 ## Rules

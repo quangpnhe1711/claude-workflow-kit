@@ -10,11 +10,11 @@ Refresh only the requested convention area in `$ARGUMENTS`; if no area is
 supplied, inspect all convention areas once.
 
 Write/update:
-- `.ai-workflow/conventions/code.md`
-- `.ai-workflow/conventions/comments.md`
-- `.ai-workflow/conventions/testing.md`
-- `.ai-workflow/conventions/database.md`
-- `.ai-workflow/conventions/metadata.json`
+- `<runtimeDir>/conventions/code.md`
+- `<runtimeDir>/conventions/comments.md`
+- `<runtimeDir>/conventions/testing.md`
+- `<runtimeDir>/conventions/database.md`
+- `<runtimeDir>/conventions/metadata.json`
 
 Derive conventions from repeated codebase evidence, not personal preference.
 

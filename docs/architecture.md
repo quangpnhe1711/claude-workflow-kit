@@ -2,15 +2,27 @@
 
 Phase 1 deliverable. Written before implementation.
 
+> **Current adaptive policy (2026-08-04).** The original extraction below
+> documents where the kit came from. Runtime behavior now classifies L0-L3:
+> `quick-fix` owns L0-L1, gate-free `standard-change` owns L2, and the original
+> hard-gated bug/feature topologies are reserved for L3. Verification is
+> risk-based, E2E is conditional even in L3, and reporting independently selects
+> quick output or one of nine installed templates.
+
 ## 1. Extracted current workflow (source: `D:\lvn-erp`)
 
 ### 1.1 What exists today
 
 | Kind | Item | Role |
 | --- | --- | --- |
-| Entry skill | `work` | Classifies task, routes to `bug-fix` or `feature-change`. No third ad-hoc workflow. |
-| Entry skill | `feature-change` | 10-phase controlled change workflow. |
-| Entry skill | `bug-fix` | 10-phase controlled defect workflow. |
+| Entry skill | `work` | Classifies L0-L3 and routes exactly one body; report-only requests bypass engineering runs. |
+| Entry skill | `solution-analysis` | Free-form analysis-only entry; stops before code and requires explicit approval. |
+| Entry skill | `feature-change` | Risk-adaptive change entry; full 10-phase body only for L3. |
+| Entry skill | `bug-fix` | Risk-adaptive defect entry; full 10-phase body only for L3. |
+| Step skill | `wf-quick-fix` | Gate-free L0-L1 fast path. |
+| Step skill | `wf-standard-change` | Gate-free L2 targeted-impact path. |
+| Step skill | `wf-solution-analysis` | Business/source/impact/solution analysis with a six-file contract. |
+| Step skill | `wf-feature-from-analysis` | Trace-linked freshness check and feature continuation without repeated analysis. |
 | Entry skill | `refresh-conventions` | Bootstrap/refresh persisted conventions. |
 | Step skill | `wf-evidence-reconciliation` | Reconcile intent / TKCB / TKCT / BR / DB / code / tests. |
 | Step skill | `wf-bug-root-cause` | Reproduce, trace, causal root cause. |
@@ -18,9 +30,9 @@ Phase 1 deliverable. Written before implementation.
 | Step skill | `wf-change-readiness` | Plan + impact + risk + scope + test strategy. |
 | Step skill | `wf-convention-manager` | Cache-first convention reuse. |
 | Step skill | `wf-implement` | Smallest correct change, no scope creep. |
-| Step skill | `wf-validation-e2e` | Evidence-based validation + E2E. |
+| Step skill | `wf-validation-e2e` | Risk-based validation with explicit E2E decision. |
 | Step skill | `wf-product-assessment` | Post-implementation, evidence-backed only. |
-| Step skill | `wf-final-report` | Compact report, no execution diary. |
+| Step skill | `wf-final-report` | Quick/detailed report router with audience-aware templates. |
 | Agent | `business-analyst` | Read-only reconciliation. |
 | Agent | `root-cause-analyst` | Read-only causal tracing. |
 | Agent | `independent-reviewer` | Read-only post-implementation review, PASS/FAIL. |
@@ -30,18 +42,18 @@ Phase 1 deliverable. Written before implementation.
 
 ### 1.2 Behavioral invariants that must survive extraction
 
-1. `NO BUSINESS DECISION = NO CODING`.
-2. Bugs: `NO ROOT CAUSE = NO FIX`.
+1. Classify L0-L3 before execution; full workflow is L3-only.
+2. In L3, `NO BUSINESS DECISION = NO CODING`; L3 bugs also require causal root cause.
 3. Documents, BR, TKCB, TKCT, code, DB and tests are **evidence, not authority**.
 4. Conclusions classified `FACT` / `INFERENCE` / `ASSUMPTION` / `PROPOSAL`.
 5. Contradictions surfaced (`C-001`, …), never silently resolved.
-6. Impact + risk + scope + test strategy precede implementation.
+6. Impact, scope, and test depth are proportional; the full readiness package is L3-only.
 7. Conventions are discovered once, persisted, reused; refreshed only on defined triggers; local convention beats generic cache.
 8. Implementation avoids unrelated scope creep; optional improvements go to assessment, not to the diff.
-9. Validation/E2E require evidence; never PASS on "looks correct".
-10. Independent review after implementation/E2E, max 3 loops.
-11. Post-implementation product/technical assessment; recommendations are report-only unless Critical/High correctness.
-12. Quiet execution; compact final report; no execution diary.
+9. Validation requires evidence; E2E runs only when it closes a stated risk gap.
+10. Independent review and product assessment are L3/on-demand; review loops max at 3.
+11. Manual verification is a valid completion state when proportional.
+12. Quiet execution; standardized quick/detailed reporting; no execution diary.
 
 ### 1.3 What is LVN-specific and must NOT be extracted
 
@@ -55,10 +67,10 @@ Phase 1 deliverable. Written before implementation.
 claude-workflow-kit/            (monorepo, npm workspaces, ESM, TS)
 ├── packages/
 │   ├── workflow-core/          @claude-workflow-kit/workflow-core
-│   │   ├── workflows/*.yaml    feature-change, bug-fix, generic
+│   │   ├── workflows/*.yaml    solution-analysis, quick-fix, standard-change, feature-change, bug-fix, generic
 │   │   └── src/                types, loader, state machine, store, runtime, cw CLI
 │   ├── claude-adapter/         @claude-workflow-kit/claude-adapter  (assets only, no build)
-│   │   ├── presets/senior-dev/ skills, agents, claude-md block  ← extracted LVN workflow
+│   │   ├── presets/senior-dev/ skills, agents, templates, claude-md block
 │   │   ├── hooks/cw-hook.mjs
 │   │   └── settings.template.json
 │   ├── monitor-server/         @claude-workflow-kit/monitor-server (node:http + SSE, zero deps)
@@ -73,7 +85,7 @@ Target project after `init` (no toolkit source copied in):
 ```
 my-project/
 ├── .claude/{skills,agents,hooks,settings.json}
-├── .ai-workflow/{config.json,conventions/,runs/,current-run}
+├── .ai-workflow/{config.json,conventions/,templates/,runs/,current-run}
 └── CLAUDE.md   (managed block only)
 ```
 
@@ -100,16 +112,31 @@ YAML in `workflow-core/workflows/`, overridable per project in `.ai-workflow/wor
 Traffic is server→client only. SSE is built into `node:http` and `EventSource`; a WebSocket dependency buys nothing here.
 
 **D7 — `WAITING_USER` is modelled as a node with `kind: waiting`.**
-Data-driven, so the branch is visible in the diagram without hardcoding it in the UI. `cw gate wait G` marks waiting-nodes bound to `G`; `cw gate pass G` skips them.
+Data-driven, so the branch is visible without UI hardcoding. A waiting node may
+be explicitly `advisory: true` (the gate-free L2 clarification) or bind to a hard
+L3 gate. The loader rejects an unmarked gate-free wait so a missing L3 gate
+cannot silently weaken policy. `cw gate wait G` / `cw gate pass G` operate only
+on gate-bound waiting nodes; an advisory node resumes through its declared edge.
+Waiting nodes cannot be completed or skipped directly; only a legal resume edge
+or the bound gate decision settles them.
 
 **D8 — `STALE` / `POSSIBLY_STALLED` is derived, never stored.**
 Computed from `lastActivityAt` vs threshold at read time. A stalled run is never rewritten as `FAILED`.
 
-**D9 — One run per workflow command, not per message.**
+**D9 — One task run, even when its workflow level changes.**
 `.ai-workflow/current-run` holds the active run id. A follow-up prompt during `WAITING_USER` continues the same run. An unrelated prompt with no active run may open a `generic` run (configurable, default on).
+When routing classifies that prompt, the generic topology is promoted in place.
+Likewise, `cw run escalate` replaces L1/L2 topology with the necessary higher
+level while preserving the run id, evidence directory, owner, timestamps, and
+append-only event history. Escalation opens the target L3 gates; it never
+abandons prior work or starts analysis from zero.
 
-**D10 — The output policy is built in, and brevity is a property of the wording only.**
-The managed `CLAUDE.md` block carries the compact-output rule; it depends on no external compression plugin. Depth is budgeted per step, not globally: execution narration is suppressed, while the steps that decide something — evidence reconciliation, business decision, readiness, implementation, review, and the final report — run at high reasoning effort. `wf-final-report` in particular is short *and* high-effort: choosing which risks and limitations are load-bearing is the hardest judgement in the run, and a report made brief by thinking less is how a known limitation goes unmentioned.
+**D10 — Execution depth and report depth are independent.**
+The managed rules suppress routine narration and classify execution by risk.
+`wf-final-report` returns a stable quick report by default or reuses a detailed
+template when the user asks for a deliverable. A small task can therefore have a
+detailed handover without paying for full execution phases, and an L3 task can
+answer a status question briefly.
 
 **D11 — Installer merges, never overwrites.**
 `CLAUDE.md` gets a `<!-- CW:START -->…<!-- CW:END -->` managed block. `.claude/settings.json` hooks are merged by matcher; unrelated user settings are untouched. Modified files are backed up as `*.cw-backup`.
@@ -154,6 +181,32 @@ The hook fails open by design, and Claude Code reads "no output" as "no opinion"
 
 **D21 — A non-default runtime directory is discoverable without flags.**
 `--runtime <dir>` is chosen at install time, but the hook, `cw` from a skill, `doctor` and the monitor all start with no flags. The installer records the name in `.claude/cw-runtime`; everything resolves through `resolveRuntimeDirName()`. Previously a custom runtime directory left the hook looking in `.ai-workflow/`, finding no config, and silently enforcing nothing.
+
+**D22 — Risk level selects topology; it is not a flag on one giant graph.**
+L0-L1 use `quick-fix`, L2 uses `standard-change`, and L3 uses the original full
+bug/feature graphs. This keeps L2 free of hard-gate artifacts while preserving
+strong enforcement once an L3 run starts. A gate-free waiting node lets L2 ask
+one material clarification without turning the entire run into a hard gate; the
+definition must mark that node `advisory: true` explicitly.
+
+**D23 — Templates are shared project assets and updates are non-destructive.**
+The preset ships report, intake, and analysis artifact templates. The installer copies only missing files
+to `.ai-workflow/templates/`; existing project versions win and deleted defaults
+are restored. Templates are committable like convention knowledge. Runtime
+artifact validation still verifies presence/non-emptiness; semantic structure is
+owned by `wf-final-report` and focused installer tests.
+
+**D24 — Solution analysis is a separate approved, traceable run.**
+`solution-analysis` writes six mandatory artifacts and records relevant-source
+SHA-256 hashes, then waits at `ANALYSIS_READY`. Explicit approval persists the
+chosen solution and scope. Handoff creates a `feature-change` with
+`sourceAnalysisRunId`; valid artifacts skip evidence/business/readiness, while a
+stale source snapshot leaves `BUSINESS_READY` open and blocks implementation.
+
+**D25 — Installer ownership is hash-based and legacy-safe.**
+New manifests record hashes for framework-owned skills, agents, and hooks.
+Unmodified managed files update normally; modified, project-owned, or legacy
+files without provable ownership are preserved and reported as conflicts.
 
 ## 4. Risks
 

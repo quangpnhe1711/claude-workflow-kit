@@ -1,13 +1,14 @@
 ---
 name: wf-evidence-reconciliation
-description: Internal workflow step for reconciling user intent, requirement/design documents, DB, current code, and tests without treating any source as absolute truth.
+description: Internal LEVEL 3 workflow step for reconciling materially conflicting user intent, requirement/design documents, DB, current code, and tests without treating any source as absolute truth.
 user-invocable: false
 effort: high
 ---
 
-Analyze all available sources.
+Analyze available sources that can materially affect the high-risk decision. Do
+not collect unrelated evidence merely because it exists.
 
-Output internally and persist to `.ai-workflow/runs/<runId>/evidence.md` when a
+Output internally and persist to `<runtimeDir>/runs/<runId>/evidence.md` when a
 run directory exists, then record it with `cw artifact evidence.md`:
 
 1. Desired business outcome stated by user.

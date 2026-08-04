@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -13,7 +14,7 @@ import {
   type RunState,
 } from '@claude-workflow-kit/workflow-core';
 import { isKitHookCommand, readJsonFile, type SettingsLike } from './merge.js';
-import { loadPreset } from './paths.js';
+import { kitVersion, loadPreset } from './paths.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
 
@@ -69,6 +70,21 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
     add('config.json', 'fail', 'missing or unreadable — run: claude-workflow-kit init');
   } else {
     add('config.json', 'ok', `port=${config.monitorPort} stall=${config.stallThresholdSeconds}s preset=${config.preset ?? '?'}`);
+    const stateSchemaVersion = config.stateSchemaVersion ?? 1;
+    add(
+      'state schema',
+      stateSchemaVersion >= 2 ? 'ok' : 'warn',
+      stateSchemaVersion >= 2
+        ? `v${stateSchemaVersion}; legacy run fields remain optional`
+        : `legacy v${stateSchemaVersion}; runs still load safely — run claude-workflow-kit update to record additive handoff capability`,
+    );
+    add(
+      'framework version',
+      config.version === kitVersion() ? 'ok' : 'warn',
+      config.version === kitVersion()
+        ? kitVersion()
+        : `installed=${config.version ?? '(legacy)'} package=${kitVersion()} — run claude-workflow-kit update; additive files are installed and custom conflicts are preserved`,
+    );
   }
 
   // --- hook wiring ---
@@ -122,6 +138,48 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
           ? `${preset.skills.length - missingSkills.length}/${preset.skills.length} installed; missing: ${missingSkills.join(', ')}`
           : `${preset.skills.length} installed`,
       );
+      const customizedSkills = preset.skills.filter((skill) => {
+        const installed = join(projectRoot, '.claude', 'skills', skill, 'SKILL.md');
+        const packaged = join(preset.dir, 'skills', skill, 'SKILL.md');
+        return existsSync(installed) && existsSync(packaged) && readFileSync(installed, 'utf8') !== readFileSync(packaged, 'utf8');
+      });
+      add(
+        'skill customizations',
+        customizedSkills.length ? 'warn' : 'ok',
+        customizedSkills.length
+          ? `preserved project/legacy versions: ${customizedSkills.join(', ')}; compare with packaged files before adopting new routing behavior`
+          : 'installed skills match the framework package',
+      );
+
+      const missingTemplates = (preset.templates ?? []).filter(
+        (t) => !existsSync(join(runtimeDir, 'templates', t)),
+      );
+      add(
+        'report templates',
+        missingTemplates.length ? 'warn' : 'ok',
+        missingTemplates.length
+          ? `${(preset.templates ?? []).length - missingTemplates.length}/${(preset.templates ?? []).length} installed; missing: ${missingTemplates.join(', ')}`
+          : `${(preset.templates ?? []).length} installed`,
+      );
+
+      const analysisTemplates = [
+        'business-analysis.md',
+        'impact-analysis.md',
+        'solution-options.md',
+        'recommended-solution.md',
+        'implementation-plan.md',
+        'test-strategy.md',
+      ];
+      const missingAnalysisTemplates = analysisTemplates.filter(
+        (name) => !existsSync(join(runtimeDir, 'templates', name)),
+      );
+      add(
+        'analysis artifact templates',
+        missingAnalysisTemplates.length ? 'warn' : 'ok',
+        missingAnalysisTemplates.length
+          ? `missing: ${missingAnalysisTemplates.join(', ')} — run claude-workflow-kit update; existing templates will be preserved`
+          : 'six-file solution-analysis contract available',
+      );
 
       const missingAgents = preset.agents.filter(
         (a) => !existsSync(join(projectRoot, '.claude', 'agents', `${a}.md`)),
@@ -134,6 +192,30 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
     } catch (error) {
       add('preset', 'fail', (error as Error).message);
     }
+  }
+
+  const installedManifest = readJsonFile<{
+    files?: string[];
+    fileHashes?: Record<string, string>;
+  }>(join(runtimeDir, 'installed.json'));
+  if (installedManifest) {
+    const hashes = installedManifest.fileHashes ?? {};
+    const modified = Object.entries(hashes).flatMap(([rel, expected]) => {
+      const file = join(projectRoot, rel);
+      if (!existsSync(file)) return [];
+      const current = createHash('sha256').update(readFileSync(file)).digest('hex');
+      return current === expected ? [] : [rel];
+    });
+    const legacyOwnership = (installedManifest.files?.length ?? 0) > 0 && !installedManifest.fileHashes;
+    add(
+      'managed file ownership',
+      modified.length || legacyOwnership ? 'warn' : 'ok',
+      modified.length
+        ? `customized files preserved on update: ${modified.join(', ')}; merge packaged changes manually if wanted`
+        : legacyOwnership
+          ? 'legacy manifest has no hashes; update preserves ambiguous existing files and installs only missing components'
+          : 'framework-owned files are hash tracked; project customizations are preserved',
+    );
   }
 
   // --- CLAUDE.md managed block ---
@@ -153,6 +235,26 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
   try {
     const defs = loadWorkflows(runtimeDir);
     add('workflow definitions', defs.size ? 'ok' : 'fail', [...defs.keys()].join(', ') || 'none found');
+    const analysis = defs.get('solution-analysis');
+    add(
+      'solution-analysis workflow',
+      analysis ? 'ok' : 'warn',
+      analysis
+        ? `${analysis.nodes.length} nodes; analysis-only approval flow available`
+        : 'missing — update the workflow-core package; no existing workflow needs to be removed',
+    );
+    const feature = defs.get('feature-change');
+    const handoffReady = Boolean(
+      feature?.nodes.some((node) => node.id === 'freshness') &&
+      feature?.edges.some((edge) => edge.from === 'prompt' && edge.to === 'freshness'),
+    );
+    add(
+      'analysis handoff config',
+      handoffReady ? 'ok' : 'warn',
+      handoffReady
+        ? 'feature-change accepts sourceAnalysisRunId through freshness'
+        : 'feature-change override lacks the additive freshness branch; preserve it and merge the packaged node/edge before handoff',
+    );
   } catch (error) {
     add('workflow definitions', 'fail', (error as Error).message);
   }
@@ -185,6 +287,17 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
     }
     if (quarantined.length) notes.push(`${quarantined.length} quarantined: ${quarantined.join(', ')}`);
     add('runs', broken.length ? 'fail' : stalled.length ? 'warn' : 'ok', notes.join('; '));
+
+    const incompleteHandoffs = loaded.filter(
+      (run) => run.sourceAnalysisRunId && !run.analysisHandoff,
+    );
+    add(
+      'run state compatibility',
+      incompleteHandoffs.length ? 'warn' : 'ok',
+      incompleteHandoffs.length
+        ? `${incompleteHandoffs.length} linked feature run(s) lack optional handoff metadata: ${incompleteHandoffs.map((run) => run.runId).join(', ')}`
+        : `${loaded.length} run(s) loaded; legacy runs require no schema rewrite`,
+    );
 
     // HOOK-01: a policy that failed open must not look like a policy that allowed.
     const health = runtime.policyHealth();

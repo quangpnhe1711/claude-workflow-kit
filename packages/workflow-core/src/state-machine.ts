@@ -81,7 +81,11 @@ export function initialRunState(
   label?: string,
 ): RunState {
   const nodes: Record<string, NodeState> = {};
-  for (const n of def.nodes) nodes[n.id] = emptyNodeState();
+  for (const n of def.nodes) {
+    nodes[n.id] = n.defaultSkipped
+      ? { status: 'SKIPPED', visits: 0, finishedAt: now }
+      : emptyNodeState();
+  }
 
   const gates: Record<string, GateStatus> = {};
   for (const g of gatesOf(def)) gates[g] = 'OPEN';
@@ -164,9 +168,16 @@ export function enterNode(
     if (!legal.ok) throw new TransitionError(legal.reason!);
   }
 
-  // A phase left ACTIVE when the run moves on is recorded as completed-by-transition.
+  // A phase left ACTIVE, or a waiting node resumed through a legal edge, is
+  // recorded as completed-by-transition. Gated waiting still cannot reach
+  // implementation until its gate passes; gate-free L2 clarification needs no
+  // artificial gate merely to settle the waiting node.
   const previous = run.nodes[run.currentNode];
-  if (previous && previous.status === 'ACTIVE' && run.currentNode !== nodeId) {
+  if (
+    previous &&
+    (previous.status === 'ACTIVE' || previous.status === 'WAITING_USER') &&
+    run.currentNode !== nodeId
+  ) {
     completeNodeState(previous, now);
   }
 
@@ -198,6 +209,13 @@ export function completeNode(
   nodeId: string,
   now: string,
 ): void {
+  const node = findNode(def, nodeId);
+  if (node?.kind === 'waiting') {
+    throw new TransitionError(
+      `waiting node "${nodeId}" cannot be completed directly; resume through its declared edge` +
+        `${node.gate ? ` or decide gate "${node.gate}"` : ''}`,
+    );
+  }
   const state = run.nodes[nodeId];
   if (!state) throw new TransitionError(`workflow "${def.id}" has no node "${nodeId}"`);
   completeNodeState(state, now);
@@ -207,6 +225,13 @@ export function completeNode(
 
 /** `cw phase skip <node>` */
 export function skipNode(def: WorkflowDefinition, run: RunState, nodeId: string, now: string): void {
+  const node = findNode(def, nodeId);
+  if (node?.kind === 'waiting') {
+    throw new TransitionError(
+      `waiting node "${nodeId}" cannot be skipped directly; resume through its declared edge` +
+        `${node.gate ? ` or decide gate "${node.gate}"` : ''}`,
+    );
+  }
   const state = run.nodes[nodeId];
   if (!state) throw new TransitionError(`workflow "${def.id}" has no node "${nodeId}"`);
   state.status = 'SKIPPED';

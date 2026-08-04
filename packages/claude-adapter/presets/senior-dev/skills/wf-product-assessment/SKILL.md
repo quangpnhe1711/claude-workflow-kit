@@ -1,11 +1,12 @@
 ---
 name: wf-product-assessment
-description: Internal post-implementation assessment for evidence-backed business, product, UX, data, maintainability, security, auditability, and scaling concerns related to the completed scope.
+description: Internal LEVEL 3 or explicitly requested post-implementation assessment for evidence-backed business, product, UX, data, maintainability, security, auditability, and scaling concerns.
 user-invocable: false
 effort: medium
 ---
 
-Run only after implementation and validation/E2E.
+Run only after implementation and appropriate validation. E2E is not a
+precondition when the risk-based validation decision found it unjustified.
 
 Do not modify code.
 
@@ -41,7 +42,7 @@ Other recommendations remain report-only.
 
 If nothing material exists: `No material follow-up recommendations.`
 
-Persist to `.ai-workflow/runs/<runId>/assessment.md` and record it with
+Persist to `<runtimeDir>/runs/<runId>/assessment.md` and record it with
 `cw artifact assessment.md`.
 
 Return the findings to the calling workflow. `wf-final-report` decides what

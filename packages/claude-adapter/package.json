@@ -1,7 +1,7 @@
 {
   "name": "@claude-workflow-kit/claude-adapter",
   "version": "0.1.0",
-  "description": "Reusable Claude Code skills, agents, hooks and rules installed into a target project",
+  "description": "Reusable risk-adaptive Claude Code skills, agents, report templates, hooks and rules installed into a target project",
   "type": "module",
   "exports": {
     "./package.json": "./package.json"

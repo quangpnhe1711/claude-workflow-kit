@@ -1,204 +1,146 @@
 ---
 name: wf-quick-fix
-description: Short workflow body for a small, explicitly specified change. Triage the narrow code path, make the smallest causal change, validate focusedly, report in three lines. Escalates to wf-bug-fix or wf-feature-change on concrete evidence. Invoked by the quick-fix and work entry skills.
+description: L0-L1 fast workflow body for trivial and small explicitly specified changes. Inspect the direct path, change it, verify minimally or targetedly, and stop. Escalate to wf-standard-change for L2 or a full bug/feature workflow for L3 only on concrete evidence. Supports detailed reports on explicit request.
 user-invocable: false
-effort: medium
+effort: low
 ---
 
-Execute this workflow for the small fix passed in by the caller.
+Execute the fast path passed by the caller:
 
-The requested outcome is already sufficiently clear. Find the narrow
-implementation cause, make the smallest correct change, validate it, stop.
+`UNDERSTAND -> ROOT CAUSE IF NEEDED -> CHANGE -> MINIMAL/TARGETED VERIFY -> REPORT`
 
-**This is not a smaller version of the full workflow.** No evidence
-reconciliation, no business gate, no readiness package, no convention discovery,
-no product assessment, no independent reviewer, no long report.
-
-`quick-fix` carries no gates, so the `PreToolUse` hook does not block edits here.
-That is the point — and the reason the escalation rules below are not optional.
+Do not invoke evidence reconciliation, readiness, convention discovery, product
+assessment, an independent reviewer, or E2E by default.
 
 Open the run:
 
-```
+```text
 cw run start quick-fix --label "<short fix label>"
+cw note "Level: <L0 — Trivial|L1 — Small fix>"
 ```
 
-If another run is active, do **not** `--force`: that retires a real workflow run.
-Report it and let the user decide. If `cw` is unavailable, do the work and
-mention the missing CLI once.
+Use L0 for a mechanical/local change whose behavior and location are obvious.
+Use L1 for a bounded bug or small behavior change that needs a concise causal
+explanation. If another run is active, do not force-retire it. If `cw` is
+unavailable, continue the task and mention that once at the end.
 
-## Phase 1 — Triage
+## Phase 1 — Understand
 
 `cw phase enter triage`
 
-Goal: locate the relevant implementation and confirm this really is a narrow fix.
+Start with the directly relevant file, its nearest dependency/condition, and the
+nearest existing test. Expand only when the cause is not yet supported.
 
-Start narrow. Normally inspect only:
+Do not automatically scan the repository, read architecture or requirement
+documents, inspect git history, refresh conventions, or audit unrelated modules.
+Reuse a valid convention cache if already relevant; otherwise one or two nearby
+files are sufficient to establish a local pattern.
 
-- the directly relevant component/file;
-- the nearest permission/condition/helper it depends on;
-- the corresponding backend authorisation **only when the request depends on it**;
-- the nearest existing test.
+- L0: confirm the target and make the direct change. Do not invent a root-cause
+  analysis for a typo, CSS adjustment, label, constant, or behavior-preserving
+  refactor.
+- L1 defect: establish one concise causal explanation. Reproduction may be code
+  evidence when a runtime reproduction would cost more than the risk it reduces.
 
-Do **not** automatically: scan the repository, read architecture docs or
-requirement documents (BRD/TKCB/TKCT), inspect git history, run full convention
-discovery, or open unrelated modules. Use cached conventions if they already
-exist; do not refresh them.
+The user's explicit expected behavior is already a decision. Ask only when at
+least two materially different business/data/permission/contract behaviors are
+plausible and the correct one cannot be inferred safely.
 
-The user's stated outcome is authoritative when it is explicit. "Cho MNG được
-tạo Action" is a decision already made — do not ask whether MNG should be able
-to. Inspect only enough implementation to know what must change.
+### Escalation
 
-Root cause here is one concise internal conclusion, not a document:
+Escalate to L2 when the task proves to require bounded multi-file/multi-layer
+impact analysis, FE+BE behavior, a local API/query/permission/state change, or a
+root cause beyond the narrow path.
 
-```
-Expected: --skip-mcp skips MCP prerequisites.
-Actual:   the Python check runs before the skip-mcp branch.
-Cause:    the installer validates Python before evaluating the option.
-```
+Escalate directly to L3 when evidence reveals migration or production-data risk,
+authentication/authorization/security, payment, concurrency/transaction,
+cross-service behavior, important contract/backward compatibility, a major
+business flow, or broad multi-module impact.
 
-That is sufficient. Do not trace commit origin unless the fix depends on it.
+State the transition once:
 
-### Ask nothing, normally
+`Escalated L1 -> L2 because: <concrete finding>`
 
-Quick-fix normally asks **zero** questions. Ask only when investigation finds a
-material ambiguity that makes the requested fix impossible to implement without
-inventing behaviour.
+or the applicable L0/L1 -> L3 transition. Preserve what is already known:
 
-- Can you implement the explicitly requested behaviour without inventing a
-  business decision? **Proceed.**
-- Would you have to invent one? **Escalate** (below).
-
-Not reasons to stop: more than one file involved; both FE and BE need editing;
-several implementation options exist; a business capability changes *because the
-user asked for it*.
-
-### Escalate when the narrow path does not hold
-
-Escalate when investigation actually finds:
-
-- genuinely ambiguous business behaviour;
-- DB/schema change or data migration;
-- unclear authorisation semantics;
-- a significant state/workflow transition change;
-- an important API contract change;
-- a backward-compatibility decision;
-- broad cross-module business impact;
-- root cause still uncertain after the narrow investigation;
-- the fix is materially larger than the request implied.
-
-Target: uncertain root cause on a defect → `wf-bug-fix`. A business
-behaviour/change request → `wf-feature-change`.
-
-How to escalate, carrying what you already learned:
-
-```
-cw note "escalating to <bug-fix|feature-change>: <the concrete finding>"
-cw run start <bug-fix|feature-change> --force --reason "escalated from quick-fix: <finding>"
+```text
+cw note "escalating <from> -> <to>: <finding>"
+cw run escalate <standard-change|bug-fix|feature-change> --reason "<finding>"
 ```
 
-Then invoke `wf-bug-fix` / `wf-feature-change` and **hand it the evidence you
-already gathered** — the files you read, the flow you traced, the conclusion you
-reached. Do not restart analysis from zero. Tell the user in one line that the
-task escalated and why.
+Then invoke exactly one body:
 
-`cw phase complete`
+- L2 -> `wf-standard-change`
+- L3 defect -> `wf-bug-fix`
+- L3 feature/change -> `wf-feature-change`
 
-## Phase 2 — Fix
+Pass the files, trace, and conclusions already gathered. Do not restart analysis.
+
+If the fast path still holds, `cw phase complete`.
+
+## Phase 2 — Change
 
 `cw phase enter fix`
 
-Implement the smallest causal change.
+Implement the smallest correct change.
 
-- No unrelated refactor, no cleanup outside the touched path.
-- Follow the surrounding repository conventions.
-- No new abstraction for a one-line fix, no architecture change.
-- No optional improvements, no adjacent fixes, even obvious ones.
-- No new tests, docs or changelog entries by default.
-- If the request says exactly what to change, do that — unless the actual code
-  proves it would create a material correctness problem, in which case say so in
-  one line before proceeding differently.
+- No unrelated refactor or adjacent cleanup.
+- Follow the surrounding local convention.
+- Add no abstraction, test, documentation, or changelog entry unless it directly
+  supports correctness or the user requested it.
+- Stop once behavior is correct, maintainable, and low risk.
 
 `cw phase complete`
 
-## Phase 3 — Validate
+## Phase 3 — Minimal or targeted verification
 
 `cw phase enter validate`
 
-Focused validation, cheapest sufficient evidence first:
+Choose the cheapest sufficient evidence:
 
-1. the nearest unit/component test;
-2. typecheck/lint/build for the affected package, when cheap;
-3. one focused runtime or manual probe, when it is what actually proves the fix.
+1. syntax or focused diff inspection for a truly mechanical L0 change;
+2. nearest unit/function/component/API test for L1;
+3. affected-package typecheck/lint/build when it catches relevant errors cheaply;
+4. one focused runtime or manual probe when that proves the behavior best.
 
-Do **not** run the full repository E2E, every package's tests, or the whole
-integration suite — unless the project has no cheaper relevant check, the touched
-area is genuinely risky, or the fix sits on a shared/core path.
+Do not run the full suite, repository E2E, or browser automation by default. If
+manual UI interaction takes seconds and risk is low, give manual verification
+steps instead of building E2E coverage.
 
-Examples: a UI visibility fix → the component test if it exists, plus the
-frontend typecheck. An installer flag fix → the installer test, plus one CLI
-probe. A small backend condition → the nearest service/API test.
+For every manual step include the expected result. Record unverified behavior as
+not verified; never convert implementation, review, build, or unit-test success
+into a stronger testing claim.
 
-Then a lightweight diff check — no reviewer agent:
-
-- the intended change is present;
-- nothing unrelated crept into the diff;
-- validation actually passed.
-
-If a check fails because of this change, fix it (`cw phase enter fix` is a legal
-transition) and rerun. If it fails for an unrelated reason, say so in one line
-and leave it alone.
+If a task-caused check fails, return to `fix`, correct it, and rerun. Leave
+unrelated failures unchanged and report them only when relevant.
 
 `cw phase complete`
 
-## Finish
+## Finish and report
 
-```
-cw run complete
-```
+If the original request explicitly asks for a report, detailed report, document,
+handover, release note, review result, impact/test report, BRD/TKCB comparison,
+or a BA/PO/Test/End User deliverable, invoke `wf-final-report` and reuse the
+matching `<runtimeDir>/templates/*.md` file (normally
+`.ai-workflow/templates/*.md`). Task level never limits report depth.
 
-No artifacts are required by this workflow, and none should be written by
-default. If the task escalated, the full workflow owns its own artifacts.
+Otherwise return a quick report with only applicable sections:
 
-## Output
+```text
+Level: <L0 — Trivial|L1 — Small fix>
 
-Narration during execution: none. No "I'm reading…", no "now I'll inspect…".
-
-Final response, usually exactly this shape:
-
-```
-Fixed:
-<what changed>
-
-Cause:
-<one short sentence>
-
-Validation:
-<what was actually run>
+Cause / Reason: <L1 defect or relevant reason only>
+Changed: <factual outcome>
+Verification: <actual checks>
+Manual verify: <numbered actions + expected results, when needed>
+Remaining risk: <evidence-backed remaining risk, when present>
 ```
 
-Example:
+`IMPLEMENTED — MANUAL UI VERIFICATION REQUIRED` is a valid completed outcome when the
+code and appropriate automated checks are complete and only a quick UI/browser
+interaction remains.
 
-```
-Fixed:
-MNG now sees Create Action using the existing backend permission.
+Run `cw run complete` after any requested report has been produced.
 
-Cause:
-The frontend visibility condition excluded MNG even though the create API
-already permitted it.
-
-Validation:
-Frontend typecheck passed and the create-action visibility case was verified.
-```
-
-No long report. No recommendations. No follow-up list.
-
-## Speed budget
-
-Optimise for latency. Inspect the direct code path first, prefer precise
-Grep/Read over broad exploration, stop investigating once the causal change is
-established. Do not collect evidence "just in case", and do not read files that
-cannot change the decision.
-
-Enough evidence to make this fix safely **beats** maximum understanding of the
-subsystem.
+Optimize for latency: stop investigating as soon as the evidence supports a
+safe causal change.

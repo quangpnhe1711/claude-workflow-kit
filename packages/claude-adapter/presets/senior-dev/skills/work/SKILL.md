@@ -1,54 +1,68 @@
 ---
 name: work
-description: Route an engineering task to the correct project workflow. Use when the user provides a task but is unsure whether to run quick-fix, bug-fix or feature-change.
+description: Classify an engineering task by risk as LEVEL 0, 1, 2, or 3 and route it to the cheapest safe workflow. Use when the user provides a task but does not want to choose between the fast, medium, or full controlled path. Route report-only requests directly to standardized reporting.
 disable-model-invocation: true
 argument-hint: "[task + inputs]"
-effort: high
+effort: medium
 ---
 
-Classify `$ARGUMENTS` using evidence, not keyword matching.
+Classify `$ARGUMENTS` before doing task work. Use evidence available in the
+request and nearby scope; do not perform a broad audit merely to classify.
 
-**Start with the cheapest safe workflow.** Escalation later is normal and cheap;
-running a ten-phase workflow over a one-line change is not.
+## Analysis-only request
 
-Route by invoking the workflow body directly:
+If the user asks to analyze business behavior, measure impact, compare/select a
+solution, or produce a plan against the current source without implementation,
+invoke `wf-solution-analysis`. Free-form input is valid: parse goal, behavior,
+scope, constraints, acceptance criteria, open questions, and assumptions. Do
+not route this request to report-only merely because its output is a document.
 
-- Explicit request, narrow-looking scope, clear expected result, no known DB
-  migration, no known business ambiguity, no known contract change
-  -> invoke `wf-quick-fix`.
-- Existing behavior is wrong/broken and the expected behavior is known or
-  inferable, but the cause is not obvious -> invoke `wf-bug-fix`.
-- New capability, business-rule change, redesign, or requirement/document-driven
-  change -> invoke `wf-feature-change`.
+An explicitly approved solution-analysis handoff routes to
+`wf-feature-from-analysis`; it does not restart normal feature discovery.
 
-Do not demand proof of all of the quick-fix conditions through broad analysis
-before choosing it. Start narrow; `wf-quick-fix` escalates itself when
-investigation finds a real reason to.
+## Report-only request
 
-Examples that route `wf-quick-fix`:
-- "Cho MNG hiển thị nút tạo Action; BE đã support."
-- "Fix duplicate import trong comm-line-chips."
-- "`--skip-mcp` vẫn check Python."
-- "Popup user picker che Submit."
+If the user asks only to report/báo cáo, summarize/tổng hợp, review results, document existing
+work, create a handover/release note, or compare supplied business documents —
+and does not ask for implementation — invoke `wf-final-report`. Do not open an
+engineering workflow.
 
-Examples that do **not**:
-- "Thiết kế lại luồng Action cho nhiều phòng." -> `wf-feature-change`.
-- "Cho phép sửa Liên lạc" when several communication types exist and scope is
-  unspecified -> `wf-feature-change`.
-- "Thay đổi cách permission của MNG hoạt động toàn module."
-  -> `wf-feature-change`.
+## Task levels
 
-If the task contains both a defect and a business change, choose the workflow
-that owns the primary business change and treat the defect as evidence within it.
+- **L0 — Trivial:** text/label/typo, small CSS, constant/config, tiny condition,
+  or behavior-preserving local refactor with obvious scope.
+- **L1 — Small fix:** bounded bug or component/function/API/filter/validation
+  change with a narrow reproducible path and low regression risk.
+- **L2 — Medium:** multiple files or layers, FE+BE, a bounded local business or
+  API behavior change, DB query, permission/state logic, or integration within a
+  clear boundary.
+- **L3 — High risk:** schema/data migration, production-data risk,
+  authentication/authorization/security, payment, concurrency/transaction,
+  cross-service behavior, important compatibility or contract change, major
+  business flow, or broad multi-module impact.
 
-Route to `wf-quick-fix` / `wf-bug-fix` / `wf-feature-change`, never to
-`quick-fix` / `bug-fix` / `feature-change`: those are user entry points and
-cannot be invoked by the model.
+Route exactly one workflow body:
 
-Do not create a fourth ad-hoc workflow.
+- L0-L1 -> `wf-quick-fix`
+- L2 -> `wf-standard-change`
+- L3 defect -> `wf-bug-fix`
+- L3 feature/business change -> `wf-feature-change`
 
-If classification itself changes what inputs are required and cannot be
-resolved from the supplied task, ask one concise question. Otherwise invoke the
-selected workflow with the original arguments.
+Do not route by words such as "bug" or "feature" alone. Do not stack workflow
+skills. A selected workflow may escalate later on concrete evidence and must
+carry forward what it already learned.
 
-The selected workflow opens the run with `cw run start`. Do not open one here.
+Typical examples:
+
+- Rename a label, adjust spacing, remove a duplicate import -> L0.
+- Fix one validation condition or a known component bug -> L1.
+- Change a bounded FE + API flow or local permission/state rule -> L2.
+- Add a migration, change authentication, payment, transactions, or a critical
+  public contract -> L3.
+
+Ask no classification question unless the answer changes the required inputs or
+would choose materially different data/permission/contract behavior. Otherwise
+make the safest reasonable inference and start.
+
+Tell the selected body the level and pass the original task unchanged. The body
+opens the run with `cw run start`; do not open one here.

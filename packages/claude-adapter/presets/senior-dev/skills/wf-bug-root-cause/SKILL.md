@@ -1,6 +1,6 @@
 ---
 name: wf-bug-root-cause
-description: Internal bug-analysis step that reproduces the issue, traces current/legacy code flow, explains why it fails, and establishes root cause before any fix.
+description: Internal LEVEL 3 bug-analysis step that reproduces where feasible, traces the necessary current/legacy flow, and establishes a causal root cause before a high-risk fix.
 user-invocable: false
 effort: high
 ---
@@ -9,7 +9,7 @@ Do not edit product code.
 
 1. Reproduce the bug when feasible.
 2. Capture expected vs actual behavior.
-3. Trace the relevant current/legacy path end-to-end:
+3. Trace the relevant current/legacy path as far as required by the risk:
    UI/request -> controller/handler -> service/domain -> repository/integration -> DB/state -> response/UI.
 4. Explain the old/current implementation:
    - what data it reads;
@@ -30,7 +30,7 @@ If reproduction fails:
 - continue static tracing if deterministic evidence is available;
 - do not pretend runtime confirmation exists.
 
-Persist to `.ai-workflow/runs/<runId>/root-cause.md` and record it with
+Persist to `<runtimeDir>/runs/<runId>/root-cause.md` and record it with
 `cw artifact root-cause.md`. Write the file **before** touching the gate:
 `cw gate pass ROOT_CAUSE_READY` is refused while `root-cause.md` is missing, and
 while the gate is open the hook denies every file edit.

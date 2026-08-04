@@ -93,12 +93,14 @@ step('install into a clean project copy', () => {
   assert.match(result.stdout, /Installed preset "senior-dev"/);
 
   assert.ok(existsSync(join(project, '.claude', 'skills', 'feature-change', 'SKILL.md')));
+  assert.ok(existsSync(join(project, '.claude', 'skills', 'wf-standard-change', 'SKILL.md')));
   assert.ok(existsSync(join(project, '.claude', 'hooks', 'cw-hook.mjs')));
   assert.ok(existsSync(join(project, '.ai-workflow', 'config.json')));
+  assert.ok(existsSync(join(project, '.ai-workflow', 'templates', 'implementation-report.md')));
 
   const claudeMd = readFileSync(join(project, 'CLAUDE.md'), 'utf8');
   assert.ok(claudeMd.includes('This line exists to prove the installer merges'), 'user content survived');
-  assert.ok(claudeMd.includes('NO BUSINESS DECISION = NO CODING.'), 'managed block injected');
+  assert.ok(claudeMd.includes('NO BUSINESS DECISION = NO CODING in an L3 run.'), 'managed block injected');
 
   // The output policy must stand on its own: no external plugin dependency.
   assert.ok(!claudeMd.includes('caveman'), 'no dependency on an external compression plugin');
@@ -1029,6 +1031,19 @@ step('quick-fix is installed and stays short', () => {
   assert.equal(finished.status, 'COMPLETED');
   assert.equal(finished.currentNode, 'done');
   assert.deepEqual(finished.artifacts, [], 'no evidence artifacts are required');
+});
+
+step('standard-change is installed as the gate-free L2 path', () => {
+  assert.match(cw('workflows').stdout, /standard-change/);
+  cw('run', 'start', 'standard-change', '--force', '--reason', 'e2e L2 topology probe', '--label', 'medium change');
+  const opened = state();
+  assert.equal(opened.workflow, 'standard-change');
+  assert.deepEqual(opened.gates, {});
+  for (const phase of ['impact', 'implementation', 'validation']) {
+    cw('phase', 'enter', phase);
+    cw('phase', 'complete');
+  }
+  cw('run', 'complete');
 });
 
 step('uninstall leaves the project clean', () => {

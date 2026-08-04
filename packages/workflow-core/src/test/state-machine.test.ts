@@ -4,11 +4,13 @@ import { loadWorkflow } from '../loader.js';
 import {
   TransitionError,
   applyRuntimeEvent,
+  checkRunComplete,
   completeRun,
   derivedRunStatus,
   enterNode,
   initialRunState,
   passGate,
+  skipNode,
   waitGate,
 } from '../state-machine.js';
 
@@ -85,6 +87,34 @@ test('a review loop can re-enter implementation', () => {
   }
   enterNode(def, run, 'implementation', T0);
   assert.equal(run.nodes['implementation']?.visits, 2);
+});
+
+test('a full workflow may skip unjustified E2E and continue to review', () => {
+  const run = fresh();
+  for (const node of ['evidence', 'business']) enterNode(def, run, node, T0);
+  passGate(def, run, 'BUSINESS_READY', T0);
+  for (const node of ['readiness', 'conventions', 'implementation', 'validation']) {
+    enterNode(def, run, node, T0);
+  }
+  skipNode(def, run, 'e2e', T0);
+  enterNode(def, run, 'review', T0);
+  assert.equal(run.currentNode, 'review');
+  assert.equal(run.nodes['e2e']?.status, 'SKIPPED');
+
+  enterNode(def, run, 'assessment', T0);
+  enterNode(def, run, 'report', T0);
+  const validArtifacts = [
+    'evidence.md',
+    'business-decision.md',
+    'implementation-plan.md',
+    'impact-risk-scope.md',
+    'test-strategy.md',
+    'validation.md',
+    'review.md',
+    'assessment.md',
+    'final-report.md',
+  ];
+  assert.deepEqual(checkRunComplete(def, run, validArtifacts), { ok: true, reasons: [] });
 });
 
 test('runtime events never move the semantic phase', () => {

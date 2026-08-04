@@ -314,6 +314,18 @@ test('gate wait cannot teleport the run into a waiting node', () => {
     assert.equal(waiting.currentNode, 'await-business');
     assert.equal(waiting.gateProvenance?.['BUSINESS_READY']?.waitedAtNode, 'await-business');
     assert.equal(waiting.gateProvenance?.['BUSINESS_READY']?.ownerVisit, 1);
+    assert.throws(
+      () => runtime.completePhase(),
+      /waiting node "await-business" cannot be completed directly/,
+    );
+    assert.throws(
+      () => runtime.skipPhase('await-business'),
+      /waiting node "await-business" cannot be skipped directly/,
+    );
+    const stillWaiting = runtime.run(run.runId);
+    assert.equal(stillWaiting.status, 'WAITING_USER');
+    assert.equal(stillWaiting.nodes['await-business']?.status, 'WAITING_USER');
+    assert.equal(stillWaiting.gates['BUSINESS_READY'], 'WAITING');
   } finally {
     cleanup();
   }

@@ -1,0 +1,66 @@
+id: standard-change
+label: Medium Change
+description: >-
+  Adaptive LEVEL 2 workflow for a bounded multi-file or multi-layer change.
+  Understand only the necessary impact, resolve material ambiguity when it
+  exists, implement, and verify in proportion to risk. No hard gate, mandatory
+  E2E, independent review, assessment, or report artifact. Escalate to a full
+  bug-fix or feature-change workflow only when concrete LEVEL 3 risk appears.
+
+nodes:
+  - id: prompt
+    label: User Prompt
+    kind: start
+    description: A bounded change whose impact is meaningful but still clear.
+
+  - id: impact
+    label: Targeted Impact
+    skill: wf-standard-change
+    description: >-
+      Trace the affected layers and compatibility boundary only as far as the
+      change requires. Establish root cause for defects and stop investigating
+      once implementation is supported by evidence.
+
+  - id: await-decision
+    label: Waiting For User
+    kind: waiting
+    advisory: true
+    description: >-
+      A material choice has at least two plausible behaviours and cannot be
+      inferred safely. This is a proportional clarification, not a hard gate.
+
+  - id: implementation
+    label: Implementation
+    skill: wf-standard-change
+    description: Smallest maintainable change within the understood impact boundary.
+
+  - id: validation
+    label: Risk-based Validation
+    skill: wf-standard-change
+    description: >-
+      Targeted tests first; package checks or integration only when the affected
+      layers justify them. Manual verification is a valid completion state.
+
+  - id: done
+    label: Done
+    kind: end
+
+edges:
+  - from: prompt
+    to: impact
+  - from: impact
+    to: await-decision
+    label: material ambiguity
+  - from: await-decision
+    to: impact
+    label: answered
+  - from: impact
+    to: implementation
+    label: scope clear
+  - from: implementation
+    to: validation
+  - from: validation
+    to: implementation
+    label: task-caused failure
+  - from: validation
+    to: done

@@ -4,8 +4,9 @@ description: >-
   Short workflow for a small, explicitly specified change. The requested outcome
   is already clear, so there is no evidence reconciliation, no business gate and
   no independent review: locate the narrow cause, make the smallest correct
-  change, validate it focusedly, stop. Escalates to bug-fix or feature-change
-  when the narrow path turns out not to hold.
+  change, validate it focusedly, stop. Escalates to standard-change for LEVEL 2
+  or a full bug-fix/feature-change workflow for LEVEL 3 when concrete evidence
+  shows the narrow path does not hold.
 
 nodes:
   - id: prompt
@@ -17,9 +18,9 @@ nodes:
     label: Triage
     skill: wf-quick-fix
     description: >-
-      Locate the relevant implementation and confirm this really is a narrow fix.
-      Direct code path only — no repository scan, no document review. Escalate
-      instead of inventing behaviour.
+      Locate the relevant implementation and confirm this is L0 or L1. Direct
+      code path only — no repository scan or document review. Root cause is
+      required for an L1 defect, not for a mechanical L0 edit.
 
   - id: fix
     label: Fix

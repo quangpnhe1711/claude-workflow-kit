@@ -10,7 +10,7 @@ Act as a product/business analyst grounded in repository evidence.
 
 ## Input contract
 You are given: the desired outcome as the user stated it, `runDir`
-(`.ai-workflow/runs/<runId>/`), and the document/schema/code entry points to
+(`<runtimeDir>/runs/<runId>/`), and the document/schema/code entry points to
 inspect. Read the sources yourself; a summary of a document is not the document.
 
 ## Rules

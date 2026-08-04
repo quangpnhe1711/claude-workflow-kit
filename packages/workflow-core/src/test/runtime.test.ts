@@ -78,6 +78,68 @@ test('an unrelated prompt opens a generic run, not a controlled workflow', () =>
   }
 });
 
+test('a routed workflow promotes the prompt hook run instead of conflicting with it', async () => {
+  const { dir, runtime, cleanup } = sandbox();
+  try {
+    applyHook(runtime, {
+      hook_event_name: 'UserPromptSubmit',
+      session_id: 'session-a',
+      prompt: 'fix the bounded notification label',
+    });
+    const genericId = runtime.currentRunId()!;
+    assert.equal(runtime.run(genericId).workflow, 'generic');
+
+    assert.equal(
+      await runCli([
+        '--project', dir,
+        '--runtime', '.ai-workflow',
+        '--session', 'session-a',
+        'run', 'start', 'quick-fix',
+        '--label', 'notification label',
+      ]),
+      0,
+    );
+
+    const promoted = runtime.run(genericId);
+    assert.equal(promoted.workflow, 'quick-fix');
+    assert.equal(runtime.currentRunId(), genericId);
+    assert.deepEqual(runtime.runIds(), [genericId]);
+    assert.equal(runtime.events(genericId).filter((event) => event.type === 'RUN_STARTED').length, 1);
+    assert.equal(runtime.events(genericId).filter((event) => event.type === 'RUN_ROUTED').length, 1);
+    assert.equal(runtime.events(genericId).filter((event) => event.type === 'RUN_ESCALATED').length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('the CLI escalates an active task in place and requires a concrete reason', async () => {
+  const { dir, runtime, cleanup } = sandbox();
+  try {
+    const quick = runtime.startRun('quick-fix', { label: 'scope grows during triage' });
+    await assert.rejects(
+      async () => runCli([
+        '--project', dir,
+        '--runtime', '.ai-workflow',
+        'run', 'escalate', 'standard-change',
+      ]),
+      /requires --reason/,
+    );
+    assert.equal(
+      await runCli([
+        '--project', dir,
+        '--runtime', '.ai-workflow',
+        'run', 'escalate', 'standard-change',
+        '--reason', 'the behavior crosses a bounded API boundary',
+      ]),
+      0,
+    );
+    assert.equal(runtime.currentRunId(), quick.runId);
+    assert.equal(runtime.run(quick.runId).workflow, 'standard-change');
+  } finally {
+    cleanup();
+  }
+});
+
 test('a tool hook alone never opens a run', () => {
   const { runtime, cleanup } = sandbox();
   try {
@@ -165,6 +227,62 @@ test('the CLI drives a full run end to end', async () => {
     cleanup();
   }
 });
+
+for (const workflowId of ['feature-change', 'bug-fix'] as const) {
+  test(`${workflowId} can skip unjustified E2E with an audited reason and still complete`, () => {
+    const { runtime, cleanup } = sandbox();
+    try {
+      const run = runtime.startRun(workflowId, { label: 'risk-based E2E decision' });
+      const evidence = (name: string) =>
+        writeFileSync(join(runtime.paths.runDir(run.runId), name), `# ${name}\n`, 'utf8');
+      for (const name of [
+        ...(workflowId === 'bug-fix' ? ['root-cause.md'] : ['evidence.md']),
+        'business-decision.md',
+        'implementation-plan.md',
+        'impact-risk-scope.md',
+        'test-strategy.md',
+        'validation.md',
+        'review.md',
+        'assessment.md',
+        'final-report.md',
+      ]) evidence(name);
+
+      if (workflowId === 'bug-fix') {
+        runtime.enterPhase('root-cause');
+        runtime.passGate('ROOT_CAUSE_READY');
+      } else {
+        runtime.enterPhase('evidence');
+      }
+      runtime.enterPhase('business');
+      runtime.passGate('BUSINESS_READY');
+      for (const phase of ['readiness', 'conventions', 'implementation', 'validation']) {
+        runtime.enterPhase(phase);
+      }
+
+      runtime.skipPhase('e2e', {
+        message: 'targeted and integration checks cover the changed boundary; no remaining E2E gap',
+      });
+      runtime.enterPhase('review');
+      runtime.enterPhase('assessment');
+      runtime.enterPhase('report');
+      runtime.completePhase();
+      const completed = runtime.completeRun();
+
+      assert.equal(completed.status, 'COMPLETED');
+      assert.equal(completed.nodes['e2e']?.status, 'SKIPPED');
+      assert.ok(
+        completed.transitions?.some((transition) =>
+          transition.from === 'validation' && transition.to === 'review'),
+      );
+      const skipped = runtime.events(run.runId).find((event) =>
+        event.type === 'NODE_SKIP' && event.node === 'e2e',
+      );
+      assert.match(skipped?.message ?? '', /no remaining E2E gap/);
+    } finally {
+      cleanup();
+    }
+  });
+}
 
 test('the CLI refuses a gate pass with no evidence and reports a non-zero exit', async () => {
   const { dir, cleanup } = sandbox();

@@ -89,7 +89,7 @@ export default function App() {
             <div className="empty empty--canvas">
               {snapshot.runs.length
                 ? 'Select a run.'
-                : `No runs in ${snapshot.runtimeDir}. Start one with /feature-change or /bug-fix.`}
+                : `No runs in ${snapshot.runtimeDir}. Start one with /work (or choose /quick-fix, /feature-change, /bug-fix).`}
             </div>
           )}
         </main>

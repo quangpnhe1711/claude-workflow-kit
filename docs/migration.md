@@ -43,8 +43,12 @@ What happens:
   hooks preserved, backup written.
 - `CLAUDE.md` — the kit's rules land inside `<!-- CW:START -->…<!-- CW:END -->`.
   Project-specific rules outside the markers are untouched, backup written.
-- `.ai-workflow/{config.json,conventions/,runs/}` created. An existing
-  `conventions/` directory is left exactly as it is.
+- `.ai-workflow/{config.json,conventions/,templates/,runs/}` created. Existing
+  conventions and report templates are reused; only missing default templates
+  are added.
+- `solution-analysis` skills and artifact templates are added when missing.
+  Existing customized or legacy-ownership files are preserved and reported;
+  `doctor` explains any manual merge needed for handoff routing.
 
 ## 4. Verify
 
@@ -69,7 +73,11 @@ constraints, module ownership).
 npx cw monitor        # http://127.0.0.1:4173
 ```
 
-Then, inside Claude Code, run a small real change with `/feature-change`.
+Then, inside Claude Code, run a bounded real change with `/work` and confirm it
+uses `quick-fix` or `standard-change` rather than a full graph.
+
+For the hard-gate probe below, deliberately run an L3 example with
+`/feature-change` (for example a migration/compatibility change).
 Watch the diagram: phases should advance as the work advances, the gate should
 turn amber when Claude asks a business question, and the active node should
 show the live tool.
@@ -87,6 +95,7 @@ Two things to check deliberately on the first run:
 
 ```
 .ai-workflow/conventions/    commit — shared repository knowledge
+.ai-workflow/templates/      commit — shared report structures
 .ai-workflow/runs/           gitignored by default (a .gitignore is installed)
 .ai-workflow/config.json     gitignored — it holds an absolute runtimeUrl for
                              this machine; re-created by `init` on each clone

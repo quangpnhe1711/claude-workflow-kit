@@ -101,8 +101,8 @@ test('a focused validation failure re-enters fix', () => {
   }
 });
 
-// C. "Cho phép sửa Liên lạc" — triage finds two materially different types.
-test('escalating to feature-change retires the quick run and restores the gate', () => {
+// C. "Cho phép sửa Liên lạc" — triage finds bounded multi-layer impact.
+test('escalating to standard-change keeps the same task run without adding a hard gate', () => {
   const { runtime, cleanup } = sandbox();
   try {
     const quick = runtime.startRun('quick-fix', { label: 'edit Liên lạc' });
@@ -110,39 +110,56 @@ test('escalating to feature-change retires the quick run and restores the gate',
     // Whatever triage learned is recorded on the run it was learned in.
     runtime.note('two communication types with different ownership; scope unspecified');
 
-    const escalated = runtime.startRun('feature-change', {
-      force: true,
-      reason: 'escalated from quick-fix: two communication types, scope unspecified',
+    const escalated = runtime.escalateRun('standard-change', {
+      reason: 'escalated L1 -> L2: two communication types need bounded impact analysis',
     });
-    assert.equal(escalated.workflow, 'feature-change');
-    assert.equal(escalated.gates['BUSINESS_READY'], 'OPEN');
+    assert.equal(escalated.runId, quick.runId, 'escalation preserves one task / one run');
+    assert.equal(escalated.workflow, 'standard-change');
+    assert.deepEqual(escalated.gates, {});
+    assert.equal(escalated.status, 'RUNNING');
+    assert.deepEqual(runtime.runIds(), [quick.runId]);
+    const event = runtime.events(quick.runId).find((item) => item.type === 'RUN_ESCALATED');
+    assert.match(event?.message ?? '', /escalated L1 -> L2/);
+    assert.deepEqual(event?.data, { fromWorkflow: 'quick-fix', toWorkflow: 'standard-change' });
 
-    const retired = runtime.run(quick.runId);
-    assert.equal(retired.status, 'ABANDONED', 'the quick run must not stay live');
-    assert.match(retired.error ?? '', /escalated from quick-fix/);
-
-    // The full workflow's gate is real again: no edit until it is earned.
-    const denied = edit(runtime);
-    assert.equal(denied.decision, 'deny');
-    assert.match(denied.reason ?? '', /BUSINESS_READY/);
+    assert.equal(edit(runtime).decision, 'allow', 'L2 stays gate-free');
   } finally {
     cleanup();
   }
 });
 
-// D. Root cause still uncertain after the narrow investigation.
-test('escalating to bug-fix restores the root-cause gate', () => {
+// D. Root cause still uncertain after the narrow investigation, but risk is bounded.
+test('uncertain bounded root cause escalates to standard-change, not the full bug workflow', () => {
   const { runtime, cleanup } = sandbox();
   try {
     const quick = runtime.startRun('quick-fix', { label: 'popup covers Submit' });
     runtime.enterPhase('triage');
 
-    const escalated = runtime.startRun('bug-fix', {
-      force: true,
-      reason: 'escalated from quick-fix: root cause not established from the direct path',
+    const escalated = runtime.escalateRun('standard-change', {
+      reason: 'escalated L1 -> L2: root cause not established from the direct path',
     });
+    assert.deepEqual(escalated.gates, {});
+    assert.equal(escalated.runId, quick.runId);
+    assert.equal(runtime.run(quick.runId).workflow, 'standard-change');
+
+    assert.equal(edit(runtime).decision, 'allow');
+  } finally {
+    cleanup();
+  }
+});
+
+test('a concrete L3 defect escalation restores the full root-cause gate', () => {
+  const { runtime, cleanup } = sandbox();
+  try {
+    const quick = runtime.startRun('quick-fix', { label: 'authorization leak' });
+    runtime.enterPhase('triage');
+
+    const escalated = runtime.escalateRun('bug-fix', {
+      reason: 'escalated L1 -> L3: authorization semantics affect protected data',
+    });
+    assert.equal(escalated.runId, quick.runId);
     assert.equal(escalated.gates['ROOT_CAUSE_READY'], 'OPEN');
-    assert.equal(runtime.run(quick.runId).status, 'ABANDONED');
+    assert.equal(runtime.run(quick.runId).workflow, 'bug-fix');
 
     const denied = edit(runtime);
     assert.equal(denied.decision, 'deny');

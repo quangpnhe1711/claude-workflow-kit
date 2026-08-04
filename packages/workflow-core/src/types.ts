@@ -7,8 +7,12 @@ export interface WorkflowNode {
   label: string;
   kind: NodeKind;
   description?: string;
-  /** Gate owned by this node, or the gate a `waiting` node is bound to. */
+  /** Gate owned by this node, or the optional hard gate a `waiting` node is bound to. */
   gate?: string;
+  /** Explicitly marks a gate-free waiting node used only for proportional clarification. */
+  advisory?: boolean;
+  /** Optional branch phase that legacy/direct runs leave skipped unless explicitly entered. */
+  defaultSkipped?: boolean;
   /** Claude skill that implements this phase (informational, for the UI). */
   skill?: string;
   /** Claude agent that implements this phase (informational, for the UI). */
@@ -108,6 +112,54 @@ export interface InvalidArtifact {
   reason: string;
 }
 
+export const SOLUTION_ANALYSIS_ARTIFACTS = [
+  'business-analysis.md',
+  'impact-analysis.md',
+  'solution-options.md',
+  'recommended-solution.md',
+  'implementation-plan.md',
+  'test-strategy.md',
+] as const;
+
+export type SolutionAnalysisArtifact = (typeof SOLUTION_ANALYSIS_ARTIFACTS)[number];
+export type AnalysisStatus = 'ANALYZING' | 'ANALYSIS_READY' | 'APPROVED';
+export type AnalysisFreshness = 'UNCHECKED' | 'VALID' | 'STALE';
+
+export interface SourceSnapshotEntry {
+  /** Project-relative path, always slash-normalised. */
+  path: string;
+  sha256: string;
+}
+
+export interface AnalysisApproval {
+  analysisRunId: string;
+  approvedAt: string;
+  approvedSolution: string;
+  approvedScope: string;
+}
+
+/** Optional so every run written before solution-analysis remains readable. */
+export interface SolutionAnalysisState {
+  status: AnalysisStatus;
+  readyAt?: string;
+  sourceSnapshot?: SourceSnapshotEntry[];
+  approval?: AnalysisApproval;
+  /** Project-relative directory holding the published, human-readable copy. */
+  reportDir?: string;
+}
+
+/** Optional feature-run link to an approved analysis run. */
+export interface AnalysisHandoffState {
+  sourceAnalysisRunId: string;
+  freshness: AnalysisFreshness;
+  checkedAt?: string;
+  stalePaths?: string[];
+  /** New baseline after a targeted refresh of stale analysis. */
+  sourceSnapshot?: SourceSnapshotEntry[];
+  refreshedAt?: string;
+  refreshReason?: string;
+}
+
 export interface AgentState {
   id: string;
   name: string;
@@ -160,6 +212,11 @@ export interface RunState {
   invalidArtifacts?: InvalidArtifact[];
   /** Edges actually traversed, oldest first. Capped; only the tail matters. */
   transitions?: Transition[];
+  /** Analysis-only lifecycle. Absent on all legacy and non-analysis runs. */
+  analysis?: SolutionAnalysisState;
+  /** Traceable handoff. Absent keeps feature-change's legacy behavior. */
+  sourceAnalysisRunId?: string;
+  analysisHandoff?: AnalysisHandoffState;
 }
 
 export const MAX_TRANSITIONS = 200;
@@ -167,6 +224,8 @@ export const MAX_TRANSITIONS = 200;
 export type EventType =
   // semantic — emitted by skills through the cw CLI
   | 'RUN_STARTED'
+  | 'RUN_ROUTED'
+  | 'RUN_ESCALATED'
   | 'RUN_COMPLETED'
   | 'RUN_FAILED'
   | 'RUN_ABANDONED'
@@ -176,6 +235,11 @@ export type EventType =
   | 'ARTIFACT_CONTRACT_OVERRIDE'
   | 'RUN_CLAIMED'
   | 'RUN_TRANSFERRED'
+  | 'ANALYSIS_READY'
+  | 'ANALYSIS_APPROVED'
+  | 'ANALYSIS_HANDOFF'
+  | 'ANALYSIS_FRESHNESS'
+  | 'ANALYSIS_REFRESHED'
   | 'NODE_ENTER'
   | 'NODE_COMPLETE'
   | 'NODE_SKIP'
@@ -260,6 +324,8 @@ export interface PolicyHealth {
 export interface KitConfig {
   /** Runtime root, relative to project root. */
   runtimeDir: string;
+  /** Additive persisted-state capability version; absent legacy config = 1. */
+  stateSchemaVersion: number;
   /** Absolute file URL of the workflow-core entry, used by hooks. */
   runtimeUrl?: string;
   monitorPort: number;
@@ -302,17 +368,25 @@ export interface KitConfig {
   allowTestCommandsBehindGate: boolean;
   /** Commands treated as tests/builds when `allowTestCommandsBehindGate`. */
   testCommands: string[];
+  /**
+   * Project-relative directory the readable copy of a completed solution
+   * analysis is published to. Run evidence stays canonical; this is the copy a
+   * human opens. Empty string disables publishing.
+   */
+  analysisReportDir: string;
   preset?: string;
   version?: string;
 }
 
 export const DEFAULT_CONFIG: KitConfig = {
   runtimeDir: '.ai-workflow',
+  stateSchemaVersion: 2,
   monitorPort: 4173,
   stallThresholdSeconds: 120,
   semanticLagThresholdSeconds: 300,
   autoGenericRun: true,
   enforceGates: true,
+  analysisReportDir: 'docs/analysis',
   mutationTools: [
     'Edit',
     'Write',

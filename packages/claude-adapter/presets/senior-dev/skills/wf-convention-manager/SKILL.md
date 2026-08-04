@@ -6,7 +6,7 @@ effort: medium
 ---
 
 Convention directory:
-`.ai-workflow/conventions/`
+`<runtimeDir>/conventions/`
 
 Expected:
 - `code.md`
@@ -24,16 +24,20 @@ Algorithm:
 2. Load existing relevant artifacts.
 3. Reuse every area the status report marks `OK`.
 4. Do NOT rescan the whole codebase on every task.
-5. Refresh the areas it marks `MISSING`, `STALE` or `UNRECORDED`, and otherwise
-   only when:
+5. Treat `STALE` or `UNRECORDED` as a review signal, not proof that every rule
+   must be rediscovered. Refresh only the relevant area when the changed
+   evidence can materially affect its guidance. Refresh a relevant `MISSING` or
+   `INVALID` area when local files are insufficient, and otherwise only when:
    - artifact/section is missing;
    - evidence is stale due to material framework/architecture/module change;
    - nearby code repeatedly contradicts cached guidance;
    - current task enters a previously unseen module;
    - user requests refresh.
-6. For refresh, inspect representative existing code and update only the
+6. If one or two neighboring files establish the intentional local convention,
+   use them instead of refreshing the project-wide cache.
+7. For refresh, inspect representative existing code and update only the
    affected convention area.
-7. Local intentional convention near modified files has precedence over generic
+8. Local intentional convention near modified files has precedence over generic
    cache. Record meaningful divergence rather than rewriting the entire cache.
 
 Comments follow exactly the same cache policy as code.

@@ -1,7 +1,7 @@
 {
   "name": "claude-workflow-kit",
   "version": "0.1.0",
-  "description": "Portable Claude Code development workflow: controlled skills, hard gates, and a live workflow monitor",
+  "description": "Portable risk-adaptive Claude Code workflow with proportional verification, L3 hard gates, reusable reports, and a live monitor",
   "keywords": ["claude", "claude-code", "workflow", "agent", "monitor"],
   "license": "MIT",
   "type": "module",

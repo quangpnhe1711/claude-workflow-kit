@@ -42,6 +42,8 @@ const HELP = `cw — claude-workflow-kit runtime CLI
 
 Workflow commands (emitted by workflow skills; the CLI owns all state):
   cw run start <workflow> [--label "..."] [--id <runId>] [--force]
+  cw run escalate <workflow> --reason "..." [--run <id>]
+      keeps the same task/run id and activates only the stricter topology
   cw run complete [--run <id>]        validated: gates, phases, artifacts, end state
   cw run fail [--run <id>] [--message "..."]
   cw run abandon [--run <id>] [--message "..."]
@@ -50,6 +52,14 @@ Workflow commands (emitted by workflow skills; the CLI owns all state):
   cw run quarantine-current [--run <id>] --reason "..."   retire an unreadable run
   cw run list [--json]
   cw run show [--run <id>] [--json]
+
+  cw analysis ready --source "path[,path...]" [--run <analysisId>]
+      validate the six artifacts, snapshot relevant source, stop at ANALYSIS_READY
+  cw analysis approve --solution "..." --scope "..." [--run <analysisId>]
+  cw analysis handoff [--run <analysisId>] [--label "..."]
+      create a trace-linked feature-change run; never happens automatically
+  cw analysis freshness [--run <featureId>]
+  cw analysis refresh --source "path[,path...]" --reason "..." [--run <featureId>]
 
   cw phase enter <node> [--run <id>] [--force]
   cw phase complete [node] [--run <id>]
@@ -119,6 +129,11 @@ function printRun(run: RunState, runtime: WorkflowRuntime, json: boolean): void 
     return;
   }
   process.stdout.write(`${line(run, runtime)}\n`);
+  // The published report is the only output a human is expected to open, so it
+  // is echoed on the command that creates it, not just in `cw status`.
+  if (run.analysis?.status === 'ANALYSIS_READY' && run.analysis.reportDir) {
+    process.stdout.write(`report ${run.analysis.reportDir}/\n`);
+  }
   if (runtime.lastWarning) {
     process.stderr.write(`cw: warning: ${runtime.lastWarning}\n`);
     runtime.lastWarning = undefined;
@@ -145,6 +160,13 @@ function statusReport(runtime: WorkflowRuntime, run: RunState): string {
     .map((e) => (e.when ? `${e.to} [${e.when}]` : e.to));
   if (nextIds.length) out.push(`next      ${nextIds.join(', ')}`);
   if (run.artifacts.length) out.push(`artifacts ${run.artifacts.join(', ')}`);
+  if (run.analysis) out.push(`analysis  ${run.analysis.status}`);
+  if (run.analysis?.reportDir) out.push(`report    ${run.analysis.reportDir}/`);
+  if (run.sourceAnalysisRunId) {
+    out.push(
+      `handoff   ${run.sourceAnalysisRunId} freshness=${run.analysisHandoff?.freshness ?? 'UNCHECKED'}`,
+    );
+  }
   const unusable = runtime.invalidArtifacts(run.runId);
   if (unusable.length) {
     out.push(`unusable  ${unusable.map((a) => `${a.name} (${a.reason})`).join(', ')}`);
@@ -216,6 +238,9 @@ export async function runCli(argv: string[]): Promise<number> {
   const reason = typeof flags['reason'] === 'string' ? flags['reason'] : undefined;
   const allowMissingArtifacts =
     flags['allow-missing-artifacts'] === true || flags['allow-missing-artifacts'] === 'true';
+  const sources = typeof flags['source'] === 'string'
+    ? flags['source'].split(/[,;\n]/).map((value) => value.trim()).filter(Boolean)
+    : [];
 
   const runtime = new WorkflowRuntime(options);
 
@@ -260,6 +285,20 @@ export async function runCli(argv: string[]): Promise<number> {
         if (sessionId) opts.sessionId = sessionId;
         const run = runtime.startRun(workflowId, opts);
         printRun(run, runtime, json);
+        return 0;
+      }
+      if (sub === 'escalate') {
+        const workflowId = positional[2];
+        if (!workflowId) {
+          throw new TransitionError(
+            'usage: cw run escalate <workflow> --reason "<concrete finding>"',
+          );
+        }
+        if (!reason) throw new TransitionError('cw run escalate requires --reason "<concrete finding>"');
+        const opts: { runId?: string; reason: string; label?: string } = { reason };
+        if (runFlag) opts.runId = runFlag;
+        if (typeof flags['label'] === 'string') opts.label = flags['label'];
+        printRun(runtime.escalateRun(workflowId, opts), runtime, json);
         return 0;
       }
       if (sub === 'claim') {
@@ -350,6 +389,50 @@ export async function runCli(argv: string[]): Promise<number> {
         return 0;
       }
       throw new TransitionError(`unknown: cw run ${sub}`);
+    }
+
+    case 'analysis': {
+      const sub = positional[1];
+      if (sub === 'ready') {
+        printRun(runtime.markAnalysisReady(withRun({ sources })), runtime, json);
+        return 0;
+      }
+      if (sub === 'approve') {
+        const approvedSolution = typeof flags['solution'] === 'string' ? flags['solution'] : undefined;
+        const approvedScope = typeof flags['scope'] === 'string' ? flags['scope'] : undefined;
+        if (!approvedSolution || !approvedScope) {
+          throw new TransitionError(
+            'usage: cw analysis approve --solution "<chosen solution>" --scope "<approved scope>"',
+          );
+        }
+        printRun(
+          runtime.approveAnalysis(withRun({ approvedSolution, approvedScope })),
+          runtime,
+          json,
+        );
+        return 0;
+      }
+      if (sub === 'handoff') {
+        const opts: { runId?: string; label?: string } = {};
+        if (runFlag) opts.runId = runFlag;
+        if (typeof flags['label'] === 'string') opts.label = flags['label'];
+        printRun(runtime.handoffAnalysis(opts), runtime, json);
+        return 0;
+      }
+      if (sub === 'freshness') {
+        printRun(runtime.checkAnalysisFreshness(withRun({})), runtime, json);
+        return 0;
+      }
+      if (sub === 'refresh') {
+        if (!reason) {
+          throw new TransitionError(
+            'usage: cw analysis refresh --source "path[,path...]" --reason "<what was re-analyzed>"',
+          );
+        }
+        printRun(runtime.refreshAnalysisHandoff(withRun({ sources, reason })), runtime, json);
+        return 0;
+      }
+      throw new TransitionError(`unknown: cw analysis ${sub ?? '<ready|approve|handoff|freshness|refresh>'}`);
     }
 
     case 'phase': {
@@ -516,16 +599,26 @@ export async function runCli(argv: string[]): Promise<number> {
       const dir = runtime.paths.runDir(run.runId);
       const artifactPath = (name: string) =>
         run.artifacts.includes(name) ? `${dir}/${name}` : `${dir}/${name} (MISSING)`;
+      const linkedAnalysis = run.sourceAnalysisRunId
+        ? runtime.paths.runDir(run.sourceAnalysisRunId)
+        : undefined;
       const context = {
         runId: run.runId,
         workflow: def.id,
         runDir: dir,
         currentNode: run.currentNode,
         gates: run.gates,
-        spec: artifactPath('business-decision.md'),
+        sourceAnalysisRunId: run.sourceAnalysisRunId,
+        sourceAnalysisDir: linkedAnalysis,
+        analysisFreshness: run.analysisHandoff?.freshness,
+        spec: run.sourceAnalysisRunId
+          ? artifactPath('recommended-solution.md')
+          : artifactPath('business-decision.md'),
         rootCause: def.nodes.some((n) => n.id === 'root-cause') ? artifactPath('root-cause.md') : undefined,
         plan: artifactPath('implementation-plan.md'),
-        impactRiskScope: artifactPath('impact-risk-scope.md'),
+        impactRiskScope: run.sourceAnalysisRunId
+          ? artifactPath('impact-analysis.md')
+          : artifactPath('impact-risk-scope.md'),
         testStrategy: artifactPath('test-strategy.md'),
         validation: artifactPath('validation.md'),
         evidence: artifactPath('evidence.md'),

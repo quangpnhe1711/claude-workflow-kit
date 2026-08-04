@@ -3,7 +3,8 @@ label: Bug Fix
 description: >-
   Controlled defect workflow. Reproduce and establish causal root cause behind
   a hard gate, resolve expected business behavior, plan, implement the smallest
-  root-cause fix, validate, review independently, assess, report.
+  root-cause fix, validate proportionally, review independently, assess,
+  report. This full workflow is reserved for LEVEL 3 risk; E2E is conditional.
 
 nodes:
   - id: prompt
@@ -65,7 +66,9 @@ nodes:
   - id: e2e
     label: E2E
     skill: wf-validation-e2e
-    description: Runtime verification that the reported symptom is gone.
+    description: >-
+      Runtime verification that the symptom is gone only when risk and the
+      remaining coverage gap justify it. Otherwise skip with the reason.
 
   - id: review
     label: Independent Review
@@ -122,6 +125,10 @@ edges:
     to: validation
   - from: validation
     to: e2e
+    label: E2E justified
+  - from: validation
+    to: review
+    label: E2E not justified
   - from: e2e
     to: review
   - from: review

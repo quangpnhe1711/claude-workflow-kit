@@ -13,7 +13,7 @@ Do not edit product code.
 ## Input contract
 
 You are given only pointers, normally the output of `cw review-context`:
-- `runDir` — the run's artifact directory (`.ai-workflow/runs/<runId>/`);
+- `runDir` — the run's artifact directory (`<runtimeDir>/runs/<runId>/`);
 - resolved paths for spec, root cause, plan, impact/risk/scope, test strategy and
   validation, each marked `(MISSING)` when it is absent;
 - `diff` — the base ref/commit range, or the changed paths;
@@ -55,9 +55,11 @@ compatibility, API/UI contract, edge cases, test gaps, out-of-scope changes.
 
 Return to the calling workflow, not to the user:
 
-- `verdict`: PASS or FAIL
-- `findings`: only actionable ones. Each with
-  Severity / Evidence (file:line or command output) / Problem / Impact /
+- `verdict`: PASS or FAIL for the workflow loop.
+- `readiness`: READY, READY WITH FOLLOW-UP, or NOT READY for reporting.
+- `findings`: only actionable ones. Classify each as P0 — Critical, P1 — High,
+  P2 — Medium, or P3 — Improvement, with
+  Location / Current behavior / Evidence (file:line or command output) / Problem / Consequence /
   Recommended correction.
 - `artifactsRead`: which of the above you actually found and read.
 
