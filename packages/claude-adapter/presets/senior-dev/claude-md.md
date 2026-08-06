@@ -41,6 +41,113 @@ A linked feature run checks relevant-source freshness before implementation.
 Reuse valid artifacts; do not repeat business/solution analysis. If material
 source changed, keep writes gated and refresh only the affected analysis.
 
+### Mission Control
+
+Every engineering task is a mission with one run. Chat carries decisions; the
+Mission Board carries state. Never code straight from the prompt: classify, plan,
+then execute.
+
+Sequence: `classify -> plan -> investigate -> decide -> implement -> validate -> deliver`.
+
+Route with the runtime instead of by feel:
+
+```text
+cw mission route --type <taskType> --complexity <trivial|low|medium|high> \
+  [--risk <level>] [--subtypes "a,b"] [--flags "database-change,permission-or-security,..."]
+cw mission classify …      # same flags; records it and escalates the run if needed
+cw board                   # organised state: monitors, checkpoints, blockers
+```
+
+| Class | Topology | Depth |
+| --- | --- | --- |
+| LIGHTNING | `quick-fix` | locate -> modify -> build -> type check |
+| FAST | `quick-fix` | analyze -> locate -> modify -> build -> smoke |
+| STANDARD | `standard-change` | targeted impact -> implement -> proportional verify |
+| DEEP | `bug-fix` / `feature-change` | full controlled workflow with hard gates |
+| RESEARCH | `solution-analysis` | evidence -> options -> trade-offs -> recommendation |
+
+Complexity sets the floor. Declared risk and structural facts (database, API
+contract, permission/security, migration, data loss, architecture, multi-module,
+breaking change) can only raise it; nothing lowers it except an analysis-only
+request. The user may always ask for a deeper path.
+
+Publish the Mission Header once, before task work: mission, task type, subtypes,
+complexity, risk, workflow, reason, required steps, skipped steps, checkpoints,
+deliverables, effort, next action. Effort is engineering size, never a promise
+about completion time.
+
+Keep the board honest as work happens — classification, plan, current action,
+task breakdown, confidence, evidence status, risks, decisions, scope changes,
+deliverables. `wf-mission-board` lists the exact commands. Emit on real change
+only; do not narrate reading, editing or building.
+
+### Evidence, confidence and risk are gates
+
+No conclusion without evidence. A file name, a plausible pattern, or a guess is
+not a root cause. Record what each evidence area actually is:
+
+`NOT_REQUIRED | MISSING | PARTIAL | SUFFICIENT | CONFLICTING | OUTDATED`
+
+Record confidence you can defend, per dimension (`requirement`, `scope`,
+`businessRule`, `architecture`, `rootCause`, `design`, `implementation`,
+`testing`, `release`). Floors scale with depth: Lightning owes `requirement` and
+`scope`; Standard adds `businessRule`, `design`, `implementation`; Deep adds
+`architecture`; a defect owes `rootCause` >= 75%; permission or security work
+raises `businessRule` and `architecture` to 80%.
+
+Entering the implementation phase is **refused** while a floor is unmet, evidence
+is `MISSING`/`CONFLICTING`/`OUTDATED`, a required checkpoint is unanswered, or a
+CRITICAL risk is open. An unassessed dimension is honest and blocks; an invented
+percentage is neither. The only way past a blocker is the user's decision:
+
+```text
+cw mission accept-risk --reason "<why proceeding is acceptable>"
+```
+
+Report what was accepted, what evidence is still missing, and the consequence if
+the assumption is wrong.
+
+Track risk as it moves: LOW -> MEDIUM warns on the board, MEDIUM -> HIGH opens a
+checkpoint, HIGH -> CRITICAL stops implementation until it is mitigated or
+explicitly accepted.
+
+### Human checkpoints
+
+A checkpoint is a state the mission stops in. While a blocking checkpoint is
+pending — and while a required one has never been opened — the hook denies
+repository writes and arbitrary commands; read-only investigation and `cw` keep
+working. Pausing the mission has the same effect.
+
+Mandatory kinds are derived from the classification: `PLAN`, `INVESTIGATION`,
+`ROOT_CAUSE`, `ARCHITECTURE`, `DESIGN`, `HIGH_RISK`, `CODE`, `RELEASE`. Open one
+with a real decision behind it, never to look thorough:
+
+```text
+cw checkpoint open <KIND> --summary "…" --decision "<what the user must decide>" \
+  --recommend "…" --alternatives "a;b" --evidence "…" --risk <level> --confidence <0-100>
+cw checkpoint resolve <id> --action approve|reject|modify --note "<their answer>"
+```
+
+Only the user's answer closes a checkpoint, from chat or from the Mission Board.
+Silence is never approval. Never approve on the user's behalf.
+
+Record every material decision with its reason, evidence, alternatives, rejected
+alternatives, impact, risk and reversibility (`cw mission decision …`). "I think
+we should reuse the existing middleware" is not a decision record.
+
+### Scope and off-track discipline
+
+Mark the moment investigation leaves the mission
+(`cw mission offtrack OFF_TRACK …`) and prefer returning to scope. Widen scope
+only with evidence that the new area is affected, and record it as a scope change
+with its impact on tasks, risk and workflow. A task added after the plan needs a
+stated reason; the runtime refuses one without it.
+
+Unrelated technical debt is an observation in the report, never work in the diff.
+Do not add abstraction, service, pattern, dependency, layer or test that the
+requirement does not need. When proposing an abstraction, show the repeated use
+case, the maintenance benefit, the complexity cost, and the simpler alternative.
+
 ### Classify every engineering task first
 
 Classify from the request and narrow evidence; do not run a broad audit just to
@@ -237,7 +344,15 @@ Reuse the corresponding file from `<runtimeDir>/templates/` (normally
 - `recommended-solution.md`
 - `implementation-plan.md`
 - `test-strategy.md`
+- `text-label.md`, `ui-change.md`, `css-layout.md`
+- `permission-report.md`, `architecture-report.md`, `refactor-report.md`
+- `research-report.md`, `documentation-report.md`
+- `execution-plan.md`, `decision-record.md`
 - `task-intake.md` (optional input guidance; free-form input remains valid)
+
+`cw mission template` names the template for the classified task type. Pick by
+task type, not by habit: a label change gets `text-label.md`, a permission change
+gets `permission-report.md`, analysis gets `research-report.md`.
 
 Preserve the chosen template's heading order, terminology, status vocabulary,
 and tables. Do not invent a new format each time. Existing project templates
@@ -259,15 +374,27 @@ owns `<runtimeDir>/runs/**/state.json`; never edit it manually.
 
 ```text
 cw run start <workflow> --label "<short label>"
+cw mission classify --type <taskType> --complexity <level> [--flags "..."]
+cw mission plan --objective "..." --scope "a,b" --out-of-scope "..."
 cw phase enter <node>
 cw phase complete
 cw phase skip <node> --message "<why it is not justified>"
+cw mission confidence <dimension> <0-100>
+cw mission evidence <category> <STATUS>
+cw mission risk --category <c> --level <l> --trigger "..."
+cw mission decision --decision "..." --reason "..."
+cw mission task add --epic "..." --title "..."
+cw mission action "<current action>"
+cw checkpoint open <KIND> --summary "..." --decision "..."
+cw checkpoint resolve <id> --action approve|reject|modify --note "..."
+cw mission pause | cw mission resume | cw mission cancel --reason "..."
 cw gate wait <GATE>
 cw gate pass <GATE>
 cw analysis ready --source "path[,path...]"
 cw analysis approve --solution "..." --scope "..."
 cw analysis handoff
 cw analysis freshness
+cw board
 cw run complete
 ```
 
@@ -291,3 +418,11 @@ decision required. Skip it for work that finishes inside one short turn.
 
 Return the selected quick or detailed report only. Do not narrate the workflow.
 Make actual verification and anything not verified unmistakable.
+
+A mission may only be reported as complete when its main deliverable exists, the
+required build ran, required validation passed, no checkpoint is unanswered, and
+no accepted-risk blocker is hidden. `cw run complete` checks the mechanical half
+and refuses otherwise. When something is outstanding, say which state applies —
+`Partially Completed`, `Blocked`, `Failed`, or `Waiting Approval` — and what is
+needed to close it. Never present an override, an accepted risk, or a skipped
+validation step as if it did not happen.

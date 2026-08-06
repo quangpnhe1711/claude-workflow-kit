@@ -17,8 +17,13 @@ not call `cw run start` again:
 
 ```text
 cw run start standard-change --label "<short task label>"
-cw note "Level: L2 — Medium"
+cw mission classify --type <taskType> --complexity medium [--flags "..."]
+cw mission plan --objective "<one sentence>" --scope "a,b" --out-of-scope "..."
 ```
+
+`classify` prints the mandatory checkpoints for this change. A required checkpoint
+that is never opened denies every repository write, so open it when the router
+says so (`wf-checkpoint`) and keep the board current (`wf-mission-board`).
 
 If another run is active, do not retire it without a deliberate reason. If `cw`
 is unavailable, continue the engineering task and mention that once in the
@@ -90,7 +95,21 @@ Otherwise, `cw phase complete`.
 
 ## Phase 2 — Implement
 
-`cw phase enter implementation`
+Record what the impact phase established, then enter the phase:
+
+```text
+cw mission evidence <category> SUFFICIENT      # per area actually established
+cw mission confidence requirement <0-100>
+cw mission confidence scope <0-100>
+cw mission confidence businessRule <0-100>
+cw mission confidence design <0-100>
+cw mission confidence implementation <0-100>
+cw phase enter implementation
+```
+
+The entry is refused while a floor is unmet, evidence is `MISSING`/`CONFLICTING`/
+`OUTDATED`, a required checkpoint is unanswered, or a CRITICAL risk is open. Fix
+the cause, or record the user's `cw mission accept-risk --reason "<why>"`.
 
 Implement the smallest maintainable change that covers the understood impact.
 

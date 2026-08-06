@@ -48,6 +48,19 @@ Select exactly the matching source under `<runtimeDir>/templates/` (normally
 | non-bug change summary | `change-report.md` |
 | release note | `release-note.md` |
 | BA/PO/Tester/End User/business stakeholder | `business-change-report.md` |
+| label, copy, placeholder or tooltip change | `text-label.md` |
+| UI change with visible behaviour | `ui-change.md` |
+| styling, spacing or responsive change | `css-layout.md` |
+| permission, authentication, authorization or security | `permission-report.md` |
+| structural / architecture decision | `architecture-report.md` |
+| behaviour-preserving refactor | `refactor-report.md` |
+| research, comparison or recommendation with no code | `research-report.md` |
+| documentation deliverable | `documentation-report.md` |
+| the approved plan itself | `execution-plan.md` |
+| one material technical decision | `decision-record.md` |
+
+`cw mission template` prints the template the classified task type maps to. Use it
+instead of defaulting to `implementation-report.md` for everything.
 
 Read the selected template and preserve its title, heading order, terminology,
 status vocabulary, and table columns. Reuse the existing project template even

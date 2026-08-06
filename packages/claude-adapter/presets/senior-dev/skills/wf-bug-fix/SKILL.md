@@ -22,8 +22,14 @@ Open the run first:
 
 ```
 cw run start bug-fix --label "<short defect label>"
-cw note "Level: L3 — High risk"
+cw mission classify --type bug-fix --complexity high [--flags "..."]
+cw mission plan --objective "<one sentence>" --scope "a,b" --out-of-scope "..."
 ```
+
+A Deep defect owes `PLAN`, `INVESTIGATION`, `ROOT_CAUSE`, `DESIGN` and `CODE`
+checkpoints, plus whatever the structural flags add, and a `rootCause` confidence
+of at least 75%. An unopened pre-implementation checkpoint denies repository
+writes exactly like the hard gate. Use `wf-checkpoint` and `wf-mission-board`.
 
 If the active run is already `bug-fix` because L1/L2 escalated in place, keep
 that run and do not call `cw run start` again. Continue with the first required
@@ -99,7 +105,23 @@ Reuse valid cached areas; refresh only what the status report flags.
 `cw phase complete`
 
 ## Phase 5 — Implement
-`cw phase enter implementation`
+
+Record what the earlier phases established, then enter the phase:
+
+```text
+cw mission evidence <category> SUFFICIENT      # per area actually established
+cw mission confidence rootCause <0-100>        # >= 75: no root cause, no fix
+cw mission confidence requirement <0-100>
+cw mission confidence scope <0-100>
+cw mission confidence businessRule <0-100>
+cw mission confidence architecture <0-100>
+cw mission confidence design <0-100>
+cw mission confidence implementation <0-100>
+cw phase enter implementation
+```
+
+The entry is refused while any floor is unmet, evidence is `MISSING`/
+`CONFLICTING`/`OUTDATED`, a checkpoint is unanswered, or a CRITICAL risk is open.
 
 Invoke `wf-implement`.
 

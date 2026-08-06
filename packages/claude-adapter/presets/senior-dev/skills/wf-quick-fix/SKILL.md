@@ -12,12 +12,18 @@ Execute the fast path passed by the caller:
 Do not invoke evidence reconciliation, readiness, convention discovery, product
 assessment, an independent reviewer, or E2E by default.
 
-Open the run:
+Open the run and record the mission:
 
 ```text
 cw run start quick-fix --label "<short fix label>"
-cw note "Level: <L0 — Trivial|L1 — Small fix>"
+cw mission classify --type <taskType> --complexity <trivial|low> [--flags "..."]
 ```
+
+`classify` routes: if the declared type or flags turn out to need a deeper path,
+the same run escalates in place. Lightning and Fast owe two confidence numbers
+before the fix phase — `requirement` and `scope`, plus `rootCause` for a defect —
+and nothing else. See `wf-mission-board` for what to emit; a checkpoint is only
+needed if a real decision appears (`wf-checkpoint`).
 
 Use L0 for a mechanical/local change whose behavior and location are obvious.
 Use L1 for a bounded bug or small behavior change that needs a concise causal
@@ -80,7 +86,15 @@ If the fast path still holds, `cw phase complete`.
 
 ## Phase 2 — Change
 
-`cw phase enter fix`
+```text
+cw mission confidence requirement <0-100>
+cw mission confidence scope <0-100>
+cw phase enter fix
+```
+
+Entering `fix` is refused while a confidence floor is unmet. If the change is so
+mechanical that assessing it is theatre, say so once and record the user's
+decision: `cw mission accept-risk --reason "<why>"`.
 
 Implement the smallest correct change.
 

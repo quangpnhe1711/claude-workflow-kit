@@ -1,7 +1,7 @@
 {
   "id": "senior-dev",
   "label": "Senior Dev",
-  "description": "Risk-adaptive engineering workflow with L0-L3 routing, proportional verification, on-demand skills, convention reuse, and standardized reporting.",
+  "description": "Mission Control engineering workflow: task-type/complexity/risk routing to Lightning, Fast, Standard, Deep or Research, evidence and confidence gates, human checkpoints with real teeth, an interactive Mission Board, convention reuse, and standardized reporting.",
   "workflows": ["solution-analysis", "feature-change", "bug-fix", "standard-change", "quick-fix", "generic"],
   "skills": [
     "work",
@@ -11,6 +11,8 @@
     "quick-fix",
     "refresh-conventions",
     "wf-status",
+    "wf-mission-board",
+    "wf-checkpoint",
     "wf-solution-analysis",
     "wf-feature-from-analysis",
     "wf-feature-change",
@@ -42,7 +44,17 @@
     "solution-options.md",
     "recommended-solution.md",
     "implementation-plan.md",
-    "test-strategy.md"
+    "test-strategy.md",
+    "text-label.md",
+    "ui-change.md",
+    "css-layout.md",
+    "permission-report.md",
+    "architecture-report.md",
+    "refactor-report.md",
+    "research-report.md",
+    "documentation-report.md",
+    "execution-plan.md",
+    "decision-record.md"
   ],
   "agents": ["business-analyst", "root-cause-analyst", "independent-reviewer"],
   "claudeMd": "claude-md.md"

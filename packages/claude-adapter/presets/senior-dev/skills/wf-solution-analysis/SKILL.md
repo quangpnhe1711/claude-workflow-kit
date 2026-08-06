@@ -10,8 +10,14 @@ Open or continue one `solution-analysis` run. Report semantic transitions with
 
 ```text
 cw run start solution-analysis --label "<short analysis label>"
+cw mission classify --type research --complexity <low|medium|high> --flags analysis-only
 cw phase enter intake
 ```
+
+Analysis-only routing skips every implementation-side safety step: no validation
+strategy applies because nothing is built. Record confidence and evidence as the
+analysis establishes them (`wf-mission-board`) and use the Research template for
+the deliverable.
 
 ## Smart intake
 
