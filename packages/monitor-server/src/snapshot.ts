@@ -1,14 +1,45 @@
 import {
   WorkflowRuntime,
+  buildMissionBoard,
   derivedRunStatus,
   derivedSemanticStatus,
+  implementationReadiness,
+  missionHealthReport,
+  missionProgress,
+  pendingCheckpoints,
+  type MissionBoardView,
   type PolicyHealth,
   type RunState,
   type WorkflowDefinition,
   type WorkflowEvent,
 } from '@claude-workflow-kit/workflow-core';
 
-export type RunView = RunState & { derivedStatus: string; derivedSemantic: string };
+/**
+ * Mission summary carried on every run in the list, so the Mission Board can be
+ * rendered without a per-run round trip. The full board comes with the detail.
+ */
+export interface MissionSummary {
+  state: string;
+  health: string;
+  healthReason: string;
+  workflowClass?: string;
+  taskType?: string;
+  complexity?: string;
+  riskLevel?: string;
+  progressPercent: number;
+  progressBasis: 'tasks' | 'state';
+  completedTasks: number;
+  totalTasks: number;
+  pendingCheckpoints: number;
+  openRisks: number;
+  blockers: string[];
+}
+
+export type RunView = RunState & {
+  derivedStatus: string;
+  derivedSemantic: string;
+  missionSummary?: MissionSummary;
+};
 
 export interface MonitorSnapshot {
   projectRoot: string;
@@ -35,13 +66,44 @@ export interface RunDetail {
   workflow: WorkflowDefinition;
   events: WorkflowEvent[];
   artifacts: string[];
+  /** Mission Board for this run, or null when the run never classified. */
+  board: MissionBoardView | null;
+}
+
+function missionSummary(run: RunState): MissionSummary | undefined {
+  const mission = run.mission;
+  if (!mission) return undefined;
+  const health = missionHealthReport(mission);
+  const progress = missionProgress(mission);
+  const board = mission.classification;
+  const summary: MissionSummary = {
+    state: mission.state,
+    health: health.health,
+    healthReason: health.reasons[0] ?? '',
+    progressPercent: progress.percent,
+    progressBasis: progress.basis,
+    completedTasks: progress.completedTasks,
+    totalTasks: progress.totalTasks,
+    pendingCheckpoints: pendingCheckpoints(mission).length,
+    openRisks: mission.risks.filter((r) => r.status === 'OPEN').length,
+    blockers: implementationReadiness(mission).blockers,
+  };
+  if (board) {
+    summary.workflowClass = board.workflowClass;
+    summary.taskType = board.taskType;
+    summary.complexity = board.complexity;
+    summary.riskLevel = board.riskLevel;
+  }
+  return summary;
 }
 
 function view(run: RunState, stall: number, lag: number, now: string): RunView {
+  const summary = missionSummary(run);
   return {
     ...run,
     derivedStatus: derivedRunStatus(run, stall, now),
     derivedSemantic: derivedSemanticStatus(run, lag, now),
+    ...(summary ? { missionSummary: summary } : {}),
   };
 }
 
@@ -83,11 +145,21 @@ export function buildSnapshot(runtime: WorkflowRuntime): MonitorSnapshot {
 export function buildRunDetail(runtime: WorkflowRuntime, runId: string): RunDetail {
   const run = runtime.run(runId);
   const now = new Date().toISOString();
+  const workflow = runtime.workflow(run.workflow);
+  const runView = view(
+    run,
+    runtime.config.stallThresholdSeconds,
+    runtime.config.semanticLagThresholdSeconds,
+    now,
+  );
   return {
-    run: view(run, runtime.config.stallThresholdSeconds, runtime.config.semanticLagThresholdSeconds, now),
-    workflow: runtime.workflow(run.workflow),
+    run: runView,
+    workflow,
     events: runtime.events(runId, 500),
     artifacts: runtime.artifacts(runId),
+    board: run.mission
+      ? buildMissionBoard(run, workflow, { runStatus: runView.derivedStatus })
+      : null,
   };
 }
 
@@ -109,7 +181,11 @@ export function snapshotSignature(snapshot: MonitorSnapshot): string {
     ...snapshot.runs.map(
       (r) =>
         `${r.runId}:${r.updatedAt}:${r.status}:${r.currentNode}:${r.runtime.claude}:` +
-        `${r.derivedStatus}:${r.derivedSemantic}:${r.artifacts.length}:${r.invalidArtifacts?.length ?? 0}`,
+        `${r.derivedStatus}:${r.derivedSemantic}:${r.artifacts.length}:${r.invalidArtifacts?.length ?? 0}:` +
+        // Mission state changes without any phase transition — an answered
+        // checkpoint or a pause is exactly what the browser must hear about.
+        `${r.mission?.updatedAt ?? '-'}:${r.missionSummary?.state ?? '-'}:${r.missionSummary?.health ?? '-'}:` +
+        `${r.missionSummary?.pendingCheckpoints ?? 0}:${r.missionSummary?.progressPercent ?? 0}`,
     ),
   ].join('|');
 }

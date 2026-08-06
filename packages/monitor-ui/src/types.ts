@@ -5,6 +5,35 @@ import type {
 } from '@claude-workflow-kit/workflow-core';
 
 export type { RunState, WorkflowDefinition, WorkflowEvent, WorkflowNode, WorkflowEdge, NodeState, ClaudeStatus } from '@claude-workflow-kit/workflow-core';
+export type {
+  Checkpoint,
+  CheckpointKind,
+  DecisionRecord,
+  EvidenceRecord,
+  MissionBoardView,
+  MissionRecord,
+  MissionState,
+  MissionTask,
+  RiskRecord,
+} from '@claude-workflow-kit/workflow-core';
+
+/** Mission summary the server attaches to every run in the list. */
+export interface MissionSummary {
+  state: string;
+  health: string;
+  healthReason: string;
+  workflowClass?: string;
+  taskType?: string;
+  complexity?: string;
+  riskLevel?: string;
+  progressPercent: number;
+  progressBasis: 'tasks' | 'state';
+  completedTasks: number;
+  totalTasks: number;
+  pendingCheckpoints: number;
+  openRisks: number;
+  blockers: string[];
+}
 
 export type RunStatusView =
   | 'RUNNING'
@@ -17,7 +46,11 @@ export type RunStatusView =
 /** Runtime moving while the phase does not. Never a failure, always reported. */
 export type SemanticView = 'OK' | 'SEMANTIC_LAG';
 
-export type RunView = RunState & { derivedStatus: RunStatusView; derivedSemantic: SemanticView };
+export type RunView = RunState & {
+  derivedStatus: RunStatusView;
+  derivedSemantic: SemanticView;
+  missionSummary?: MissionSummary;
+};
 
 export interface PolicyHealthView {
   status: 'OK' | 'DEGRADED' | 'DISABLED';
@@ -48,6 +81,19 @@ export interface RunDetail {
   workflow: WorkflowDefinition;
   events: WorkflowEvent[];
   artifacts: string[];
+  /** Mission Board, or null for a run that never classified. */
+  board: import('@claude-workflow-kit/workflow-core').MissionBoardView | null;
+}
+
+/** One Mission Board action, as the POST body the monitor server expects. */
+export interface BoardAction {
+  action: string;
+  checkpointId?: string;
+  note?: string;
+  reason?: string;
+  taskId?: string;
+  scope?: string;
+  state?: string;
 }
 
 /** Node display status: the stored status, plus STALE derived at render time. */

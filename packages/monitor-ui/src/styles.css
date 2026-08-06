@@ -576,3 +576,160 @@ body {
   color: var(--failed);
   font-size: 12px;
 }
+
+/* ---- mission board ---- */
+
+.board {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pill--health_healthy { color: var(--active); border-color: var(--active); }
+.pill--health_needs_attention { color: var(--waiting); border-color: var(--waiting); }
+.pill--health_at_risk { color: var(--stale); border-color: var(--stale); }
+.pill--health_blocked { color: var(--waiting); border-color: var(--waiting); }
+.pill--health_critical { color: var(--failed); border-color: var(--failed); }
+
+.pill--risk_low { color: var(--dim); }
+.pill--risk_medium { color: var(--waiting); border-color: var(--waiting); }
+.pill--risk_high { color: var(--stale); border-color: var(--stale); }
+.pill--risk_critical { color: var(--failed); border-color: var(--failed); }
+.pill--done { color: #7ee2a8; border-color: var(--done); }
+.pill--blocked { color: var(--failed); border-color: var(--failed); }
+
+.board__bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-node);
+  border: 1px solid var(--border);
+  margin: 10px 0 4px;
+  overflow: hidden;
+}
+
+.board__bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.board__reasons {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.board__checkpoint {
+  margin: 14px 0;
+  border: 1px solid var(--waiting);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.board__summary,
+.board__decision,
+.board__reco {
+  font-size: 12px;
+  margin: 4px 0;
+}
+
+.board__decision {
+  color: var(--waiting);
+}
+
+.board__meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  margin: 6px 0;
+}
+
+.board__note {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-node);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.board__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.btn {
+  background: var(--bg-node);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn--approve { color: var(--active); border-color: var(--done); }
+.btn--reject { color: var(--failed); }
+.btn--risk { color: var(--stale); margin-top: 8px; }
+
+.btn--tiny {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+.board__metrics {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+
+.board__metrics li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.board__tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+
+.board__tasks li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.board__task-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board__hint {
+  font-size: 11px;
+  margin: 8px 0 0;
+}

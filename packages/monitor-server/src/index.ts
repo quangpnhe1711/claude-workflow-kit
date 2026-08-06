@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { createMonitorServer, type MonitorHandle, type MonitorOptions } from './server.js';
 
 export * from './snapshot.js';
+export * from './actions.js';
 export { createMonitorServer } from './server.js';
 export type { MonitorOptions, MonitorHandle } from './server.js';
 

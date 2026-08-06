@@ -39,6 +39,31 @@ export function Header({ snapshot, run, connection, nowMs }: Props) {
               claude {run.runtime.claude.replace('_', ' ').toLowerCase()}
             </span>
             {run.runtime.tool && <span className="header__stat tool">{run.runtime.tool}</span>}
+            {run.missionSummary && (
+              <>
+                <span
+                  className={`pill pill--health_${run.missionSummary.health.toLowerCase()}`}
+                  title={run.missionSummary.healthReason}
+                >
+                  {run.missionSummary.health.replace('_', ' ').toLowerCase()}
+                </span>
+                <span className="header__stat dim" title="Mission state">
+                  {run.missionSummary.state.replace(/_/g, ' ').toLowerCase()}
+                  {run.missionSummary.workflowClass
+                    ? ` · ${run.missionSummary.workflowClass.toLowerCase()}`
+                    : ''}
+                </span>
+                {run.missionSummary.pendingCheckpoints > 0 && (
+                  <span
+                    className="pill pill--waiting_user"
+                    title="A human checkpoint is open. Repository writes are denied until it is answered."
+                  >
+                    {run.missionSummary.pendingCheckpoints} checkpoint
+                    {run.missionSummary.pendingCheckpoints > 1 ? 's' : ''}
+                  </span>
+                )}
+              </>
+            )}
             <span className="header__stat dim">{ago(run.runtime.lastEventAt ?? run.lastActivityAt, nowMs)}</span>
             <span className="header__stat dim">elapsed {elapsed(run.startedAt, run.finishedAt, nowMs)}</span>
           </>

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { fetchRunDetail, fetchSnapshot, subscribe } from './api';
 import { WorkflowGraph } from './graph/WorkflowGraph';
 import { Header } from './panels/Header';
+import { MissionBoard } from './panels/MissionBoard';
 import { NodeDetail } from './panels/NodeDetail';
 import { RunList } from './panels/RunList';
 import { useMonitor } from './store';
@@ -94,7 +95,10 @@ export default function App() {
           )}
         </main>
 
-        {run && workflow && selectedNodeId && (
+        {/* One right-hand column: a selected phase wins, otherwise the board.
+            The board is the default view for a classified mission — it is where
+            the user answers a checkpoint. */}
+        {run && workflow && selectedNodeId ? (
           <NodeDetail
             workflow={workflow}
             run={run}
@@ -104,6 +108,12 @@ export default function App() {
             stallThresholdSeconds={snapshot.stallThresholdSeconds}
             onClose={() => selectNode(null)}
           />
+        ) : (
+          run &&
+          detail?.board &&
+          detail.run.runId === run.runId && (
+            <MissionBoard run={run} board={detail.board} onApplied={setDetail} />
+          )
         )}
       </div>
     </div>

@@ -2,6 +2,7 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { WorkflowRuntime } from '@claude-workflow-kit/workflow-core';
+import { ActionError, applyBoardAction, type ActionRequest } from './actions.js';
 import { buildRunDetail, buildSnapshot, snapshotSignature, type MonitorSnapshot } from './snapshot.js';
 
 export interface MonitorOptions {
@@ -39,6 +40,54 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 function sendText(res: ServerResponse, status: number, body: string, type = 'text/plain; charset=utf-8'): void {
   res.writeHead(status, { 'content-type': type, 'access-control-allow-origin': '*' });
   res.end(body);
+}
+
+const MAX_BODY_BYTES = 64 * 1024;
+
+function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((done, fail) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        fail(new ActionError('request body is too large', 413));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8').trim();
+      if (!raw) return done({});
+      try {
+        done(JSON.parse(raw));
+      } catch (error) {
+        fail(new ActionError(`body is not JSON: ${(error as Error).message}`));
+      }
+    });
+    req.on('error', (error) => fail(error));
+  });
+}
+
+/**
+ * The API is readable from anywhere (`access-control-allow-origin: *`) because it
+ * is local telemetry. Writing is different: any web page the user has open could
+ * POST to localhost and approve a checkpoint on their behalf. Browsers always send
+ * `Origin` on a cross-origin POST and cannot forge it, so a mismatched Origin is
+ * refused. A tool with no Origin at all (curl, a script) is not a browser and is
+ * allowed — it already has shell access to run `cw` directly.
+ */
+function sameOrigin(req: IncomingMessage, port: number): boolean {
+  const origin = req.headers['origin'];
+  if (!origin || Array.isArray(origin)) return !origin;
+  try {
+    const url = new URL(origin);
+    if (url.port && url.port !== String(port)) return false;
+    return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 export interface MonitorHandle {
@@ -117,6 +166,35 @@ export function createMonitorServer(options: MonitorOptions = {}): MonitorHandle
 
       if (path === '/api/state') {
         sendJson(res, 200, buildSnapshot(runtime));
+        return;
+      }
+
+      const actionMatch = /^\/api\/runs\/([^/]+)\/actions$/.exec(path);
+      if (actionMatch) {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { error: 'use POST to send a Mission Board action' });
+          return;
+        }
+        if (!sameOrigin(req, port)) {
+          sendJson(res, 403, {
+            error: 'cross-origin Mission Board actions are refused; open the monitor UI itself',
+          });
+          return;
+        }
+        const runId = decodeURIComponent(actionMatch[1]!);
+        readJsonBody(req)
+          .then((body) => {
+            const detail = applyBoardAction(runtime, runId, (body ?? {}) as ActionRequest);
+            // The board must not wait a poll tick to show the user their own click.
+            lastSignature = '';
+            sendJson(res, 200, detail);
+          })
+          .catch((error: unknown) => {
+            const status = error instanceof ActionError ? error.status : 400;
+            sendJson(res, status, {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
         return;
       }
 
