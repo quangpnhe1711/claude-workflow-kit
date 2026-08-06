@@ -1,5 +1,8 @@
 /** Workflow definition — the data the state machine and the diagram both read. */
 
+// Type-only, so the mission/types cycle is erased at runtime.
+import type { MissionRecord } from './mission.js';
+
 export type NodeKind = 'start' | 'phase' | 'waiting' | 'end';
 
 export interface WorkflowNode {
@@ -13,6 +16,12 @@ export interface WorkflowNode {
   advisory?: boolean;
   /** Optional branch phase that legacy/direct runs leave skipped unless explicitly entered. */
   defaultSkipped?: boolean;
+  /**
+   * This phase changes the repository. Mission readiness (evidence, confidence,
+   * pending checkpoints) is enforced on entry. Absent, the runtime falls back to
+   * the conventional ids `implementation` and `fix`.
+   */
+  implementation?: boolean;
   /** Claude skill that implements this phase (informational, for the UI). */
   skill?: string;
   /** Claude agent that implements this phase (informational, for the UI). */
@@ -217,6 +226,12 @@ export interface RunState {
   /** Traceable handoff. Absent keeps feature-change's legacy behavior. */
   sourceAnalysisRunId?: string;
   analysisHandoff?: AnalysisHandoffState;
+  /**
+   * Mission Control layer: classification, plan, evidence, confidence, risk,
+   * decisions, task breakdown and human checkpoints. Absent on every run created
+   * before V2 and on runs that never classified.
+   */
+  mission?: MissionRecord;
 }
 
 export const MAX_TRANSITIONS = 200;
@@ -240,6 +255,27 @@ export type EventType =
   | 'ANALYSIS_HANDOFF'
   | 'ANALYSIS_FRESHNESS'
   | 'ANALYSIS_REFRESHED'
+  // mission control — the Tech Lead layer over the topology
+  | 'MISSION_CLASSIFIED'
+  | 'MISSION_PLANNED'
+  | 'MISSION_STATE'
+  | 'MISSION_PAUSED'
+  | 'MISSION_RESUMED'
+  | 'MISSION_CANCELLED'
+  | 'CONFIDENCE_UPDATED'
+  | 'EVIDENCE_UPDATED'
+  | 'RISK_RECORDED'
+  | 'RISK_ESCALATED'
+  | 'DECISION_RECORDED'
+  | 'TASK_ADDED'
+  | 'TASK_UPDATED'
+  | 'CHECKPOINT_OPENED'
+  | 'CHECKPOINT_RESOLVED'
+  | 'ACCEPTED_RISK'
+  | 'OFF_TRACK'
+  | 'CONTEXT_SUMMARY'
+  | 'SCOPE_CHANGED'
+  | 'DELIVERABLE_UPDATED'
   | 'NODE_ENTER'
   | 'NODE_COMPLETE'
   | 'NODE_SKIP'

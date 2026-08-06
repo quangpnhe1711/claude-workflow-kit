@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { loadWorkflow, loadWorkflows } from './loader.js';
 import * as sm from './state-machine.js';
+import * as mc from './mission.js';
 import { inspectConventions, type ConventionReport } from './conventions.js';
 import { evaluateMutation, missingGates, type RunGateContext as PolicyRunContext } from './policy.js';
 import {
@@ -767,6 +768,765 @@ export class WorkflowRuntime {
     }
   }
 
+  // ---- mission control -----------------------------------------------------
+
+  /** The mission record, created on first use. */
+  private missionOf(run: RunState): mc.MissionRecord {
+    if (!run.mission) run.mission = mc.emptyMission(this.now());
+    return run.mission;
+  }
+
+  private touchMission(run: RunState, mission: mc.MissionRecord): void {
+    const now = this.now();
+    mission.updatedAt = now;
+    run.updatedAt = now;
+    run.lastActivityAt = now;
+    run.lastSemanticAt = now;
+  }
+
+  /** Mission record of a run, or undefined when it never classified. */
+  mission(runId?: string): mc.MissionRecord | undefined {
+    return this.resolveRun(runId).mission;
+  }
+
+  missionBoard(runId?: string): mc.MissionBoardView {
+    const run = this.resolveRun(runId);
+    return mc.buildMissionBoard(run, this.workflow(run.workflow), {
+      runStatus: this.derivedStatus(run),
+    });
+  }
+
+  /** Blockers between the mission and its implementation phase. */
+  missionReadiness(runId?: string): mc.MissionReadiness {
+    const run = this.resolveRun(runId);
+    return mc.implementationReadiness(run.mission ?? mc.emptyMission(run.updatedAt));
+  }
+
+  /**
+   * Classify the mission and route it. The router picks the shortest safe
+   * workflow; when that is deeper than the running topology the run is escalated
+   * in place, so the run id, evidence and history survive the upgrade.
+   */
+  classifyMission(opts: {
+    runId?: string;
+    taskType: mc.TaskType;
+    subtypes?: mc.TaskType[];
+    complexity: mc.Complexity;
+    riskLevel?: mc.RiskLevel;
+    flags?: mc.MissionFlags;
+    requestedClass?: mc.WorkflowClass;
+    reason?: string;
+    /** Adopt the routed topology even when it means escalating the run. */
+    route?: boolean;
+  }): { run: RunState; route: mc.RouteResult } {
+    let run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'classify it');
+    const routeInput: mc.RouteInput = {
+      taskType: opts.taskType,
+      complexity: opts.complexity,
+    };
+    if (opts.subtypes) routeInput.subtypes = opts.subtypes;
+    if (opts.riskLevel) routeInput.riskLevel = opts.riskLevel;
+    if (opts.flags) routeInput.flags = opts.flags;
+    if (opts.requestedClass) routeInput.requestedClass = opts.requestedClass;
+    const route = mc.routeMission(routeInput);
+
+    // Routing to a deeper topology is an escalation, not a new task.
+    if (route.topology !== run.workflow && opts.route !== false) {
+      try {
+        run = this.escalateRun(route.topology, {
+          runId: run.runId,
+          reason: `mission classified ${opts.complexity}/${route.riskLevel} -> ${route.workflowClass}`,
+        });
+      } catch (error) {
+        this.lastWarning =
+          `mission routes to "${route.topology}" but the run stays on "${run.workflow}": ` +
+          `${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+
+    const mission = this.missionOf(run);
+    const classification: mc.MissionClassification = {
+      taskType: opts.taskType,
+      subtypes: opts.subtypes ?? [],
+      complexity: opts.complexity,
+      riskLevel: route.riskLevel,
+      workflowClass: route.workflowClass,
+      topology: run.workflow,
+      effort: route.effort,
+      reason: opts.reason ? `${opts.reason} (${route.reason})` : route.reason,
+      flags: opts.flags ?? {},
+      classifiedAt: this.now(),
+    };
+    mission.classification = classification;
+    if (mission.state === 'RECEIVED' || mission.state === 'CLASSIFYING') mission.state = 'PLANNING';
+    this.touchMission(run, mission);
+    this.record(run, 'MISSION_CLASSIFIED', {
+      node: run.currentNode,
+      message:
+        `${classification.taskType} / ${classification.complexity} / risk ${classification.riskLevel} ` +
+        `-> ${classification.workflowClass} (${classification.topology})`,
+      data: {
+        classification,
+        requiredCheckpoints: route.requiredCheckpoints,
+        validation: route.validation,
+        confidenceThresholds: route.confidenceThresholds,
+      },
+    });
+    return { run: this.persist(run), route };
+  }
+
+  /** Persist the Execution Plan. Scope and out-of-scope are both required. */
+  planMission(opts: {
+    runId?: string;
+    objective: string;
+    scope: string[];
+    outOfScope?: string[];
+    assumptions?: string[];
+    dependencies?: string[];
+    stopConditions?: string[];
+    successCriteria?: string[];
+    requiredSteps?: string[];
+    skippedSteps?: string[];
+    validation?: string[];
+  }): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'plan it');
+    if (!opts.objective.trim()) throw new sm.TransitionError('cw mission plan requires --objective');
+    if (!opts.scope.length) throw new sm.TransitionError('cw mission plan requires --scope "a,b,c"');
+    const mission = this.missionOf(run);
+    const classification = mission.classification;
+    const plan: mc.MissionPlan = {
+      objective: opts.objective.trim(),
+      scope: opts.scope,
+      outOfScope: opts.outOfScope ?? [],
+      assumptions: opts.assumptions ?? [],
+      dependencies: opts.dependencies ?? [],
+      stopConditions: opts.stopConditions ?? [],
+      successCriteria: opts.successCriteria ?? [],
+      requiredSteps: opts.requiredSteps ?? [],
+      skippedSteps: opts.skippedSteps ?? [],
+      validation:
+        opts.validation ??
+        (classification ? mc.validationStrategy(classification.workflowClass, classification.flags) : []),
+      createdAt: this.now(),
+    };
+    mission.plan = plan;
+    if (mission.state === 'RECEIVED' || mission.state === 'CLASSIFYING') mission.state = 'PLANNING';
+    this.touchMission(run, mission);
+    this.record(run, 'MISSION_PLANNED', {
+      node: run.currentNode,
+      message: plan.objective,
+      data: { plan },
+    });
+    return this.persist(run);
+  }
+
+  /**
+   * Move the mission state. Illegal jumps are refused: a mission that reports
+   * IMPLEMENTING straight out of PLANNING is a board that lies about its own
+   * process. `force` records the jump instead of hiding it.
+   */
+  setMissionState(state: mc.MissionState, opts: { runId?: string; force?: boolean; message?: string } = {}): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'change its mission state');
+    const mission = this.missionOf(run);
+    const from = mission.state;
+    if (!mc.missionStateAllowed(from, state)) {
+      if (!opts.force) {
+        throw new sm.TransitionError(
+          `mission state ${from} -> ${state} is not a legal transition. ` +
+            `Legal from here: ${mc.MISSION_STATES.filter((s) => mc.missionStateAllowed(from, s) && s !== from).join(', ')}. ` +
+            `Force it deliberately with --force if the mission really jumped.`,
+        );
+      }
+    }
+    if (state === 'IMPLEMENTING') this.assertImplementationReady(run, 'IMPLEMENTING');
+    mission.state = state;
+    if (state !== 'PAUSED') {
+      delete mission.stateBeforePause;
+      delete mission.pauseReason;
+    }
+    this.touchMission(run, mission);
+    this.record(run, 'MISSION_STATE', {
+      node: run.currentNode,
+      message: `${from} -> ${state}${opts.message ? `: ${opts.message}` : ''}`,
+      data: { from, to: state, forced: Boolean(opts.force) && !mc.missionStateAllowed(from, state) },
+    });
+    return this.persist(run);
+  }
+
+  pauseMission(opts: { runId?: string; reason?: string } = {}): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'pause it');
+    const mission = this.missionOf(run);
+    if (mission.state === 'PAUSED') return run;
+    if (mc.TERMINAL_MISSION_STATES.includes(mission.state)) {
+      throw new sm.TransitionError(`mission is already ${mission.state} and cannot be paused`);
+    }
+    mission.stateBeforePause = mission.state;
+    mission.state = 'PAUSED';
+    if (opts.reason) mission.pauseReason = opts.reason;
+    this.touchMission(run, mission);
+    this.record(run, 'MISSION_PAUSED', {
+      node: run.currentNode,
+      message: opts.reason ?? 'paused by the user',
+    });
+    return this.persist(run);
+  }
+
+  resumeMission(opts: { runId?: string } = {}): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'resume it');
+    const mission = this.missionOf(run);
+    if (mission.state !== 'PAUSED') return run;
+    const target = mission.stateBeforePause ?? 'INVESTIGATING';
+    mission.state = target;
+    delete mission.stateBeforePause;
+    delete mission.pauseReason;
+    this.touchMission(run, mission);
+    this.record(run, 'MISSION_RESUMED', { node: run.currentNode, message: `resumed at ${target}` });
+    return this.persist(run);
+  }
+
+  /**
+   * The user withdraws the mission. The run itself is retired through
+   * `run abandon`, which keeps "cancelled by the user" distinct from "finished".
+   */
+  cancelMission(opts: { runId?: string; reason: string }): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'cancel it');
+    if (!opts.reason.trim()) throw new sm.TransitionError('cancelling a mission requires a reason');
+    const mission = this.missionOf(run);
+    mission.state = 'CANCELLED';
+    this.touchMission(run, mission);
+    this.record(run, 'MISSION_CANCELLED', { node: run.currentNode, message: opts.reason });
+    this.persist(run);
+    return this.abandonRun({ runId: run.runId, message: `mission cancelled: ${opts.reason}` });
+  }
+
+  setConfidence(
+    dimension: mc.ConfidenceDimension,
+    value: number,
+    opts: { runId?: string; note?: string } = {},
+  ): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'record its confidence');
+    if (!Number.isFinite(value) || value < 0 || value > 100) {
+      throw new sm.TransitionError('confidence must be a number between 0 and 100');
+    }
+    const mission = this.missionOf(run);
+    const previous = mission.confidence[dimension];
+    mission.confidence[dimension] = Math.round(value);
+    this.touchMission(run, mission);
+    this.record(run, 'CONFIDENCE_UPDATED', {
+      node: run.currentNode,
+      message: `${dimension} ${previous ?? '—'} -> ${Math.round(value)}%${opts.note ? `: ${opts.note}` : ''}`,
+      data: { dimension, value: Math.round(value), previous },
+    });
+    return this.persist(run);
+  }
+
+  setEvidence(
+    category: mc.EvidenceCategory,
+    status: mc.EvidenceStatus,
+    opts: { runId?: string; note?: string } = {},
+  ): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'record its evidence');
+    const mission = this.missionOf(run);
+    const record: mc.EvidenceRecord = { status, updatedAt: this.now() };
+    if (opts.note) record.note = opts.note;
+    mission.evidence[category] = record;
+    this.touchMission(run, mission);
+    this.record(run, 'EVIDENCE_UPDATED', {
+      node: run.currentNode,
+      message: `${category}=${status}${opts.note ? `: ${opts.note}` : ''}`,
+      data: { category, status },
+    });
+    return this.persist(run);
+  }
+
+  /** Record or update a risk. An escalation is an event, not a silent rewrite. */
+  recordRisk(opts: {
+    runId?: string;
+    id?: string;
+    category: mc.RiskCategory;
+    level: mc.RiskLevel;
+    trigger: string;
+    evidence?: string;
+    probability?: string;
+    impact?: string;
+    mitigation?: string;
+    status?: mc.RiskRecord['status'];
+    requiredDecision?: string;
+  }): { run: RunState; risk: mc.RiskRecord; escalated: boolean } {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'record its risks');
+    if (!opts.trigger.trim()) throw new sm.TransitionError('a risk needs --trigger "<what raised it>"');
+    const mission = this.missionOf(run);
+    const id = opts.id ?? `R-${String(mission.risks.length + 1).padStart(3, '0')}`;
+    const existing = mission.risks.find((r) => r.id === id);
+    const now = this.now();
+    const previousLevel = existing?.level;
+    const risk: mc.RiskRecord = {
+      id,
+      category: opts.category,
+      level: opts.level,
+      trigger: opts.trigger.trim(),
+      status: opts.status ?? existing?.status ?? 'OPEN',
+      peakLevel:
+        existing && mc.RISK_LEVELS.indexOf(existing.peakLevel) > mc.RISK_LEVELS.indexOf(opts.level)
+          ? existing.peakLevel
+          : opts.level,
+      updatedAt: now,
+    };
+    for (const key of ['evidence', 'probability', 'impact', 'mitigation', 'requiredDecision'] as const) {
+      const value = opts[key] ?? existing?.[key];
+      if (value) risk[key] = value;
+    }
+    if (existing) mission.risks[mission.risks.indexOf(existing)] = risk;
+    else mission.risks.push(risk);
+
+    const escalated =
+      previousLevel !== undefined &&
+      mc.RISK_LEVELS.indexOf(opts.level) > mc.RISK_LEVELS.indexOf(previousLevel);
+    this.touchMission(run, mission);
+    this.record(run, escalated ? 'RISK_ESCALATED' : 'RISK_RECORDED', {
+      node: run.currentNode,
+      message: `${id} ${opts.category} ${previousLevel ? `${previousLevel} -> ` : ''}${opts.level}: ${risk.trigger}`,
+      data: { risk, previousLevel },
+    });
+    // Medium -> High opens a checkpoint by contract; Critical stops the work.
+    if (escalated && (opts.level === 'HIGH' || opts.level === 'CRITICAL')) {
+      this.lastWarning =
+        `risk ${id} escalated to ${opts.level}. ` +
+        (opts.level === 'CRITICAL'
+          ? 'Implementation is blocked until it is mitigated or explicitly accepted.'
+          : `Open a checkpoint: cw checkpoint open HIGH_RISK --summary "..." --decision "..."`);
+    }
+    return { run: this.persist(run), risk, escalated };
+  }
+
+  /** A technical decision with its reason, evidence, alternatives and risk. */
+  recordDecision(opts: {
+    runId?: string;
+    id?: string;
+    decision: string;
+    reason: string;
+    evidence?: string[];
+    confidence?: number;
+    alternatives?: string[];
+    rejected?: string[];
+    impact?: string;
+    risk?: mc.RiskLevel;
+    reversibility?: string;
+    approvalRequired?: boolean;
+  }): { run: RunState; decision: mc.DecisionRecord } {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'record its decisions');
+    if (!opts.decision.trim() || !opts.reason.trim()) {
+      throw new sm.TransitionError('a decision needs both --decision and --reason');
+    }
+    const mission = this.missionOf(run);
+    const decision: mc.DecisionRecord = {
+      id: opts.id ?? `D-${String(mission.decisions.length + 1).padStart(3, '0')}`,
+      decision: opts.decision.trim(),
+      reason: opts.reason.trim(),
+      evidence: opts.evidence ?? [],
+      alternatives: opts.alternatives ?? [],
+      rejected: opts.rejected ?? [],
+      approvalRequired: opts.approvalRequired ?? false,
+      at: this.now(),
+    };
+    if (opts.confidence !== undefined) decision.confidence = Math.round(opts.confidence);
+    if (opts.impact) decision.impact = opts.impact;
+    if (opts.risk) decision.risk = opts.risk;
+    if (opts.reversibility) decision.reversibility = opts.reversibility;
+    mission.decisions.push(decision);
+    this.touchMission(run, mission);
+    this.record(run, 'DECISION_RECORDED', {
+      node: run.currentNode,
+      message: `${decision.id}: ${decision.decision}`,
+      data: { decision },
+    });
+    return { run: this.persist(run), decision };
+  }
+
+  /** Add a task to the breakdown. Mid-mission additions must justify themselves. */
+  addMissionTask(opts: {
+    runId?: string;
+    id?: string;
+    epic: string;
+    title: string;
+    weight?: number;
+    reason?: string;
+    evidence?: string;
+    status?: mc.MissionTaskStatus;
+  }): { run: RunState; task: mc.MissionTask } {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'change its task breakdown');
+    if (!opts.epic.trim() || !opts.title.trim()) {
+      throw new sm.TransitionError('a task needs --epic and --title');
+    }
+    const mission = this.missionOf(run);
+    // A task added after planning is scope movement, so it carries a reason.
+    const planned = !mission.plan || mission.state === 'PLANNING' || mission.state === 'CLASSIFYING';
+    if (!planned && !opts.reason?.trim()) {
+      throw new sm.TransitionError(
+        'a task added after the plan needs --reason "<why this mission needs it>" (evidence, not tidiness)',
+      );
+    }
+    const task: mc.MissionTask = {
+      id: opts.id ?? `T-${String(mission.tasks.length + 1).padStart(3, '0')}`,
+      epic: opts.epic.trim(),
+      title: opts.title.trim(),
+      status: opts.status ?? 'PENDING',
+      weight: opts.weight && opts.weight > 0 ? opts.weight : 1,
+      updatedAt: this.now(),
+    };
+    if (opts.reason) task.reason = opts.reason.trim();
+    if (opts.evidence) task.evidence = opts.evidence;
+    mission.tasks.push(task);
+    this.touchMission(run, mission);
+    this.record(run, 'TASK_ADDED', {
+      node: run.currentNode,
+      message: `${task.id} ${task.epic}: ${task.title}${task.reason ? ` (${task.reason})` : ''}`,
+      data: { task },
+    });
+    return { run: this.persist(run), task };
+  }
+
+  updateMissionTask(
+    id: string,
+    status: mc.MissionTaskStatus,
+    opts: { runId?: string; message?: string } = {},
+  ): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'change its task breakdown');
+    const mission = this.missionOf(run);
+    const task = mission.tasks.find((t) => t.id === id);
+    if (!task) {
+      throw new sm.TransitionError(
+        `no task "${id}" in this mission (known: ${mission.tasks.map((t) => t.id).join(', ') || 'none'})`,
+      );
+    }
+    const previous = task.status;
+    task.status = status;
+    task.updatedAt = this.now();
+    this.touchMission(run, mission);
+    this.record(run, 'TASK_UPDATED', {
+      node: run.currentNode,
+      message: `${id} ${previous} -> ${status}${opts.message ? `: ${opts.message}` : ''}`,
+      data: { taskId: id, from: previous, to: status },
+    });
+    return this.persist(run);
+  }
+
+  /**
+   * Park the mission on a human decision. A blocking checkpoint denies repository
+   * mutation while it is pending, which is what makes it a checkpoint rather than
+   * a printed suggestion.
+   */
+  openCheckpoint(opts: {
+    runId?: string;
+    id?: string;
+    kind: mc.CheckpointKind;
+    summary: string;
+    decisionRequired: string;
+    recommendation?: string;
+    alternatives?: string[];
+    evidence?: string[];
+    risk?: mc.RiskLevel;
+    impact?: string;
+    confidence?: number;
+  }): { run: RunState; checkpoint: mc.Checkpoint } {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'open its checkpoints');
+    if (!opts.summary.trim() || !opts.decisionRequired.trim()) {
+      throw new sm.TransitionError('a checkpoint needs --summary and --decision "<what the user must decide>"');
+    }
+    const mission = this.missionOf(run);
+    const open = mission.checkpoints.find((c) => c.status === 'PENDING' && c.kind === opts.kind);
+    if (open) {
+      throw new sm.TransitionError(
+        `checkpoint ${open.id} (${opts.kind}) is already pending; resolve it before opening another`,
+      );
+    }
+    const checkpoint: mc.Checkpoint = {
+      id: opts.id ?? `CP-${String(mission.checkpoints.length + 1).padStart(3, '0')}`,
+      kind: opts.kind,
+      summary: opts.summary.trim(),
+      decisionRequired: opts.decisionRequired.trim(),
+      alternatives: opts.alternatives ?? [],
+      evidence: opts.evidence ?? [],
+      status: 'PENDING',
+      openedAt: this.now(),
+      openedAtNode: run.currentNode,
+    };
+    if (opts.recommendation) checkpoint.recommendation = opts.recommendation;
+    if (opts.risk) checkpoint.risk = opts.risk;
+    if (opts.impact) checkpoint.impact = opts.impact;
+    if (opts.confidence !== undefined) checkpoint.confidence = Math.round(opts.confidence);
+    mission.checkpoints.push(checkpoint);
+
+    const waitingState: Partial<Record<mc.CheckpointKind, mc.MissionState>> = {
+      PLAN: 'WAITING_PLAN_APPROVAL',
+      INVESTIGATION: 'WAITING_INVESTIGATION_APPROVAL',
+      ROOT_CAUSE: 'WAITING_INVESTIGATION_APPROVAL',
+      ARCHITECTURE: 'WAITING_DESIGN_APPROVAL',
+      DESIGN: 'WAITING_DESIGN_APPROVAL',
+      HIGH_RISK: 'WAITING_DESIGN_APPROVAL',
+      CODE: 'WAITING_CODE_APPROVAL',
+      RELEASE: 'WAITING_RELEASE_APPROVAL',
+    };
+    const target = waitingState[opts.kind];
+    if (target && mc.missionStateAllowed(mission.state, target)) mission.state = target;
+    this.touchMission(run, mission);
+    this.record(run, 'CHECKPOINT_OPENED', {
+      node: run.currentNode,
+      message: `${checkpoint.id} [${opts.kind}] ${checkpoint.decisionRequired}`,
+      data: { checkpoint },
+    });
+    return { run: this.persist(run), checkpoint };
+  }
+
+  /** Record the human answer. Only the user's decision closes a checkpoint. */
+  resolveCheckpoint(
+    id: string,
+    opts: {
+      runId?: string;
+      action: 'approve' | 'reject' | 'modify' | 'cancel';
+      note?: string;
+      via?: 'cli' | 'board';
+      /** Mission state to continue in; defaults per action. */
+      nextState?: mc.MissionState;
+    },
+  ): { run: RunState; checkpoint: mc.Checkpoint } {
+    const run = this.resolveRun(opts.runId);
+    const mission = this.missionOf(run);
+    const checkpoint = mission.checkpoints.find((c) => c.id === id);
+    if (!checkpoint) {
+      throw new sm.TransitionError(
+        `no checkpoint "${id}" (pending: ${mc.pendingCheckpoints(mission).map((c) => c.id).join(', ') || 'none'})`,
+      );
+    }
+    if (checkpoint.status !== 'PENDING') {
+      throw new sm.TransitionError(`checkpoint ${id} is already ${checkpoint.status}`);
+    }
+    const statusByAction = {
+      approve: 'APPROVED',
+      reject: 'REJECTED',
+      modify: 'MODIFIED',
+      cancel: 'CANCELLED',
+    } as const;
+    if ((opts.action === 'reject' || opts.action === 'modify') && !opts.note?.trim()) {
+      throw new sm.TransitionError(`"${opts.action}" needs --note "<what to change and why>"`);
+    }
+    checkpoint.status = statusByAction[opts.action];
+    checkpoint.respondedAt = this.now();
+    checkpoint.respondedVia = opts.via ?? 'cli';
+    if (opts.note) checkpoint.response = opts.note.trim();
+
+    const continueState: Partial<Record<mc.CheckpointKind, mc.MissionState>> = {
+      PLAN: 'INVESTIGATING',
+      INVESTIGATION: 'DESIGNING',
+      ROOT_CAUSE: 'DESIGNING',
+      ARCHITECTURE: 'READY_TO_IMPLEMENT',
+      DESIGN: 'READY_TO_IMPLEMENT',
+      HIGH_RISK: 'READY_TO_IMPLEMENT',
+      CODE: 'VALIDATING',
+      RELEASE: 'DELIVERING',
+    };
+    const reworkState: Partial<Record<mc.CheckpointKind, mc.MissionState>> = {
+      PLAN: 'PLANNING',
+      INVESTIGATION: 'INVESTIGATING',
+      ROOT_CAUSE: 'INVESTIGATING',
+      ARCHITECTURE: 'DESIGNING',
+      DESIGN: 'DESIGNING',
+      HIGH_RISK: 'DESIGNING',
+      CODE: 'IMPLEMENTING',
+      RELEASE: 'VALIDATING',
+    };
+    const next =
+      opts.nextState ??
+      (opts.action === 'approve' ? continueState[checkpoint.kind] : reworkState[checkpoint.kind]);
+    if (next && mc.missionStateAllowed(mission.state, next)) mission.state = next;
+    this.touchMission(run, mission);
+    this.record(run, 'CHECKPOINT_RESOLVED', {
+      node: run.currentNode,
+      message: `${id} ${checkpoint.status}${checkpoint.response ? `: ${checkpoint.response}` : ''}`,
+      data: { checkpointId: id, action: opts.action, via: checkpoint.respondedVia, missionState: mission.state },
+    });
+    return { run: this.persist(run), checkpoint };
+  }
+
+  /**
+   * "Proceed Anyway": the user takes the listed blockers on knowingly. The waiver
+   * is permanent provenance — it never reads as a mission that had no blockers.
+   */
+  acceptMissionRisk(opts: { runId?: string; reason: string; blockers?: string[] }): {
+    run: RunState;
+    accepted: string[];
+  } {
+    const run = this.resolveRun(opts.runId);
+    if (!opts.reason.trim()) {
+      throw new sm.TransitionError('accepting a blocker requires --reason "<why proceeding is acceptable>"');
+    }
+    const mission = this.missionOf(run);
+    const current = mc.implementationReadiness(mission);
+    const accepted = opts.blockers?.length ? opts.blockers : current.blockers;
+    if (!accepted.length) throw new sm.TransitionError('there is nothing to accept: the mission has no blockers');
+    mission.acceptances.push({ blockers: accepted, reason: opts.reason.trim(), at: this.now() });
+    this.touchMission(run, mission);
+    this.record(run, 'ACCEPTED_RISK', {
+      node: run.currentNode,
+      message: `${opts.reason.trim()} — accepted: ${accepted.join('; ')}`,
+      data: { blockers: accepted },
+    });
+    return { run: this.persist(run), accepted };
+  }
+
+  setOffTrack(opts: {
+    runId?: string;
+    status: 'ON_TRACK' | 'OFF_TRACK';
+    expectedScope?: string;
+    actualScope?: string;
+    reason?: string;
+    recommendation?: string;
+  }): RunState {
+    const run = this.resolveRun(opts.runId);
+    const mission = this.missionOf(run);
+    const record: mc.OffTrackRecord = { status: opts.status, at: this.now() };
+    for (const key of ['expectedScope', 'actualScope', 'reason', 'recommendation'] as const) {
+      if (opts[key]) record[key] = opts[key]!;
+    }
+    mission.offTrack = record;
+    this.touchMission(run, mission);
+    this.record(run, 'OFF_TRACK', {
+      node: run.currentNode,
+      message: `${opts.status}${opts.reason ? `: ${opts.reason}` : ''}`,
+      data: { offTrack: record },
+    });
+    return this.persist(run);
+  }
+
+  /** Context recovery: a summary the mission can continue from honestly. */
+  recordContextSummary(opts: {
+    runId?: string;
+    summary?: string;
+    coverage?: number;
+    openQuestions?: string[];
+    degraded?: boolean;
+  }): RunState {
+    const run = this.resolveRun(opts.runId);
+    const mission = this.missionOf(run);
+    const record: mc.ContextRecord = {
+      openQuestions: opts.openQuestions ?? [],
+      degraded: opts.degraded ?? false,
+      at: this.now(),
+    };
+    if (opts.summary) record.summary = opts.summary;
+    if (opts.coverage !== undefined) record.coverage = Math.round(opts.coverage);
+    mission.context = record;
+    this.touchMission(run, mission);
+    this.record(run, 'CONTEXT_SUMMARY', {
+      node: run.currentNode,
+      message: record.degraded ? `context DEGRADED: ${record.summary ?? ''}` : record.summary ?? 'context summary',
+      data: { context: record },
+    });
+    return this.persist(run);
+  }
+
+  recordScopeChange(opts: {
+    runId?: string;
+    previousScope: string;
+    newScope: string;
+    reason: string;
+    addedTasks?: string[];
+    removedTasks?: string[];
+    riskChange?: string;
+    workflowChange?: string;
+  }): RunState {
+    const run = this.resolveRun(opts.runId);
+    this.assertOwnership(run, 'change its scope');
+    if (!opts.reason.trim()) throw new sm.TransitionError('a scope change requires --reason');
+    const mission = this.missionOf(run);
+    const record: mc.ScopeChangeRecord = {
+      previousScope: opts.previousScope,
+      newScope: opts.newScope,
+      reason: opts.reason.trim(),
+      addedTasks: opts.addedTasks ?? [],
+      removedTasks: opts.removedTasks ?? [],
+      at: this.now(),
+    };
+    if (opts.riskChange) record.riskChange = opts.riskChange;
+    if (opts.workflowChange) record.workflowChange = opts.workflowChange;
+    mission.scopeChanges.push(record);
+    if (mission.plan) mission.plan.scope = opts.newScope.split(/\s*[,;]\s*/).filter(Boolean);
+    this.touchMission(run, mission);
+    this.record(run, 'SCOPE_CHANGED', {
+      node: run.currentNode,
+      message: `${opts.previousScope} -> ${opts.newScope}: ${record.reason}`,
+      data: { scopeChange: record },
+    });
+    return this.persist(run);
+  }
+
+  setDeliverable(opts: {
+    runId?: string;
+    name: string;
+    required: boolean;
+    reason?: string;
+    status?: mc.Deliverable['status'];
+    location?: string;
+  }): RunState {
+    const run = this.resolveRun(opts.runId);
+    const mission = this.missionOf(run);
+    const existing = mission.deliverables.find((d) => d.name === opts.name);
+    const deliverable: mc.Deliverable = {
+      name: opts.name,
+      required: opts.required,
+      status: opts.status ?? existing?.status ?? (opts.required ? 'PENDING' : 'SKIPPED'),
+      updatedAt: this.now(),
+    };
+    const reason = opts.reason ?? existing?.reason;
+    if (reason) deliverable.reason = reason;
+    const location = opts.location ?? existing?.location;
+    if (location) deliverable.location = location;
+    if (existing) mission.deliverables[mission.deliverables.indexOf(existing)] = deliverable;
+    else mission.deliverables.push(deliverable);
+    this.touchMission(run, mission);
+    this.record(run, 'DELIVERABLE_UPDATED', {
+      node: run.currentNode,
+      message: `${deliverable.name} required=${deliverable.required} ${deliverable.status}`,
+      data: { deliverable },
+    });
+    return this.persist(run);
+  }
+
+  /** Current Action on the board. Cheap, so it can be honest. */
+  setCurrentAction(action: string, opts: { runId?: string } = {}): RunState {
+    const run = this.resolveRun(opts.runId);
+    const mission = this.missionOf(run);
+    mission.currentAction = action;
+    mission.updatedAt = this.now();
+    run.updatedAt = mission.updatedAt;
+    run.lastActivityAt = mission.updatedAt;
+    return this.persist(run);
+  }
+
+  /** Refuse to start implementation while the mission says it is not ready. */
+  private assertImplementationReady(run: RunState, what: string): void {
+    if (!run.mission) return;
+    const readiness = mc.implementationReadiness(run.mission);
+    if (readiness.ok) return;
+    throw new sm.TransitionError(
+      `${what} is refused; the mission is not ready:\n  - ${readiness.blockers.join('\n  - ')}\n` +
+        `Resolve them, or take them on deliberately: cw mission accept-risk --reason "<why>"`,
+    );
+  }
+
   // ---- semantic transitions -------------------------------------------------
 
   /**
@@ -825,6 +1585,12 @@ export class WorkflowRuntime {
     next.artifacts = [...current.artifacts];
     if (current.invalidArtifacts?.length) next.invalidArtifacts = [...current.invalidArtifacts];
     if (current.lastRuntimeAt) next.lastRuntimeAt = current.lastRuntimeAt;
+    // Escalation replaces the topology, never the mission: classification,
+    // evidence, decisions and open checkpoints belong to the task, not the graph.
+    if (current.mission) {
+      next.mission = current.mission;
+      if (next.mission.classification) next.mission.classification.topology = workflowId;
+    }
 
     writeRun(this.paths, next);
     writeCurrentRunId(this.paths, next.runId);
@@ -1070,6 +1836,11 @@ export class WorkflowRuntime {
       if (opts.allowMissingArtifacts) contract.allowMissing = true;
       if (opts.reason) contract.reason = opts.reason;
       this.assertArtifactContract(run, def, run.currentNode, nodeId, contract);
+      // Entering the phase that changes the repository is the moment the mission
+      // has to be ready: evidence, confidence and every open human checkpoint.
+      if (mc.isImplementationNode(def, nodeId)) {
+        this.assertImplementationReady(run, `entering "${nodeId}"`);
+      }
     }
     const wouldBeIllegal =
       opts.force === true && nodeId !== run.currentNode && !sm.allowedEdges(def, run).map((e) => e.to).includes(nodeId);
@@ -1082,7 +1853,31 @@ export class WorkflowRuntime {
       });
     }
     this.record(run, 'NODE_ENTER', { node: nodeId });
+    this.syncMissionState(run, def);
     return this.persist(run);
+  }
+
+  /**
+   * Keep the mission state honest about the phase the run is actually in. Never
+   * while a checkpoint is pending: the board must keep saying it is waiting on the
+   * user until the user answers.
+   */
+  private syncMissionState(run: RunState, def: WorkflowDefinition): void {
+    const mission = run.mission;
+    if (!mission) return;
+    if (mc.TERMINAL_MISSION_STATES.includes(mission.state)) return;
+    if (mission.state === 'PAUSED' || mc.pendingCheckpoints(mission).length) return;
+    const implied = mc.missionStateForNode(def, run);
+    if (!implied || implied === mission.state) return;
+    if (!mc.missionStateAllowed(mission.state, implied)) return;
+    const from = mission.state;
+    mission.state = implied;
+    mission.updatedAt = this.now();
+    this.record(run, 'MISSION_STATE', {
+      node: run.currentNode,
+      message: `${from} -> ${implied} (followed phase "${run.currentNode}")`,
+      data: { from, to: implied, derived: true },
+    });
   }
 
   /** Declared artifacts of a phase that are missing or unusable as evidence. */
@@ -1225,13 +2020,20 @@ export class WorkflowRuntime {
     this.assertOwnership(run, 'complete it');
     const def = this.workflow(run.workflow);
     const check = sm.checkRunComplete(def, run, this.validArtifacts(run.runId));
-    if (!check.ok) {
+    const missionBlockers = run.mission ? mc.missionCompletionBlockers(run.mission) : [];
+    const reasons = [...check.reasons, ...missionBlockers];
+    if (reasons.length) {
       throw new sm.TransitionError(
-        `run ${run.runId} cannot be completed:\n  - ${check.reasons.join('\n  - ')}\n` +
+        `run ${run.runId} cannot be completed:\n  - ${reasons.join('\n  - ')}\n` +
           `A run that will not finish is retired, not completed: cw run abandon --message "<why>"`,
       );
     }
     sm.completeRun(def, run, this.now());
+    if (run.mission) {
+      run.mission.state = 'COMPLETED';
+      run.mission.updatedAt = this.now();
+      delete run.mission.currentAction;
+    }
     this.record(run, 'RUN_COMPLETED', { node: run.currentNode });
     this.persist(run);
     this.unbindRun(run.runId);
@@ -1243,6 +2045,10 @@ export class WorkflowRuntime {
     const run = this.resolveRun(opts.runId);
     this.assertOwnership(run, 'fail it');
     sm.failRun(run, this.now(), opts.message);
+    if (run.mission && !mc.TERMINAL_MISSION_STATES.includes(run.mission.state)) {
+      run.mission.state = 'FAILED';
+      run.mission.updatedAt = this.now();
+    }
     const extra: Partial<WorkflowEvent> = { node: run.currentNode };
     if (opts.message) extra.message = opts.message;
     this.record(run, 'RUN_FAILED', extra);

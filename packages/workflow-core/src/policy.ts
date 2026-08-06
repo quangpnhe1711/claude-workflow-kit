@@ -30,6 +30,7 @@ import {
   type WorkflowDefinition,
 } from './types.js';
 import { artifactsOf, findNode, gateOwner, gatesOf } from './state-machine.js';
+import { missionMutationBlocks } from './mission.js';
 
 const ALLOW = (kind: MutationKind): MutationDecision => ({ decision: 'allow', kind });
 
@@ -51,6 +52,23 @@ export type PolicyConfig = Pick<
 /** Gates the run still has to pass before anything may change. */
 export function missingGates(def: WorkflowDefinition, run: RunState): string[] {
   return gatesOf(def).filter((gate) => run.gates[gate] !== 'PASSED');
+}
+
+/**
+ * Everything that currently forbids repository mutation for one run: unpassed
+ * topology gates plus mission blocks (paused mission, an open human checkpoint, a
+ * required checkpoint never opened, evidence the mission itself called unusable).
+ *
+ * Mission blocks matter most on the gate-free topologies: without them a Standard
+ * or Fast mission could print "checkpoint required" and keep editing anyway.
+ */
+export function mutationBlocks(def: WorkflowDefinition, run: RunState): string[] {
+  const blocks = missingGates(def, run).map((gate) => {
+    const owner = gateOwner(def, gate);
+    return owner ? `unpassed gate ${gate} (decided at "${owner.id}")` : `unpassed gate ${gate}`;
+  });
+  if (run.mission) blocks.push(...missionMutationBlocks(run.mission));
+  return blocks;
 }
 
 /** Artifact filenames the run's current phase is allowed to write right now. */
@@ -269,7 +287,17 @@ export function evaluateCommand(command: string, config: PolicyConfig): CommandV
 // ---- semantic `cw` commands ------------------------------------------------
 
 /** `cw` subcommands that change workflow state rather than reporting it. */
-const SEMANTIC_CW = new Set(['phase', 'gate', 'note', 'artifact', 'analysis']);
+const SEMANTIC_CW = new Set([
+  'phase',
+  'gate',
+  'note',
+  'artifact',
+  'analysis',
+  // Mission Control writes the same state file: classification, plan, risks,
+  // decisions and checkpoint answers all belong to the owning session's run.
+  'mission',
+  'checkpoint',
+]);
 // `start` is here because it either promotes the prompt's generic run or, with
 // `--force`, retires a run whose gate may still be closed. Both change state.
 const SEMANTIC_RUN_SUBS = new Set([
@@ -368,24 +396,24 @@ function ownershipDenial(input: MutationCheckInput): MutationDecision | undefine
   };
 }
 
-function denyReason(blocking: RunGateContext[], missing: Map<string, string[]>): string {
-  const parts = blocking.map((ctx) => {
-    const gates = missing.get(ctx.run.runId) ?? [];
-    const owners = gates
-      .map((gate) => {
-        const owner = gateOwner(ctx.def, gate);
-        return owner ? `${gate} (decided at "${owner.id}")` : gate;
-      })
-      .join(', ');
-    return `run ${ctx.run.runId} (${ctx.def.id}) has unpassed gate(s): ${owners}`;
-  });
-  const gates = [...new Set([...missing.values()].flat())];
+function denyReason(
+  blocking: RunGateContext[],
+  blocks: Map<string, string[]>,
+  gateNames: string[],
+): string {
+  const parts = blocking.map(
+    (ctx) => `run ${ctx.run.runId} (${ctx.def.id}): ${(blocks.get(ctx.run.runId) ?? []).join('; ')}`,
+  );
+  const fix = gateNames.length
+    ? `Complete the gate phase, persist its evidence artifact, then run: ` +
+      `${gateNames.map((g) => `cw gate pass ${g}`).join(' && ')}. ` +
+      `If the decision is not yours to make, run: cw gate wait ${gateNames[0]} --message "<open decision>" and ask the user.`
+    : `Inspect it with: cw board. Then resolve the human decision (cw checkpoint resolve <id> ` +
+      `--action approve|reject|modify --note "..."), resume a paused mission (cw mission resume), ` +
+      `or take the blockers on deliberately (cw mission accept-risk --reason "<why>").`;
   return (
-    `Blocked by claude-workflow-kit: ${parts.join('; ')}. ` +
-    `Nothing in the repository may change until ${gates.join(' and ')} pass. ` +
-    `Complete the gate phase, persist its evidence artifact, then run: ` +
-    gates.map((g) => `cw gate pass ${g}`).join(' && ') +
-    `. If the decision is not yours to make, run: cw gate wait ${gates[0]} --message "<open decision>" and ask the user.`
+    `Blocked by claude-workflow-kit: ${parts.join(' | ')}. ` +
+    `Nothing in the repository may change until those clear. ${fix}`
   );
 }
 
@@ -404,18 +432,22 @@ export function evaluateMutation(input: MutationCheckInput): MutationDecision {
 
   const live = input.runs.filter((r) => !isTerminalRun(r.run.status));
   const missing = new Map<string, string[]>();
+  const blocks = new Map<string, string[]>();
   for (const ctx of live) {
     const gaps = missingGates(ctx.def, ctx.run);
     if (gaps.length) missing.set(ctx.run.runId, gaps);
+    const reasons = mutationBlocks(ctx.def, ctx.run);
+    if (reasons.length) blocks.set(ctx.run.runId, reasons);
   }
-  const blocking = live.filter((ctx) => missing.has(ctx.run.runId));
+  const blocking = live.filter((ctx) => blocks.has(ctx.run.runId));
+  const gateNames = [...new Set([...missing.values()].flat())];
 
   const command = isCommandTool(toolName, config);
   const write = isFileWriteTool(toolName, config);
   if (!command && !write) return ALLOW('none');
   if (!blocking.length) return ALLOW(command ? 'command' : 'repository');
 
-  const base = denyReason(blocking, missing);
+  const base = denyReason(blocking, blocks, gateNames);
 
   if (command) {
     const raw = typeof toolInput?.['command'] === 'string' ? (toolInput['command'] as string) : '';
@@ -424,10 +456,10 @@ export function evaluateMutation(input: MutationCheckInput): MutationDecision {
     return {
       decision: 'deny',
       kind: 'command',
-      missingGates: [...new Set([...missing.values()].flat())],
+      missingGates: gateNames,
       runId: blocking[0]!.run.runId,
       reason:
-        `${base} Command execution is denied behind an open gate because ${verdict.reason}; ` +
+        `${base} Command execution is denied while mutation is blocked because ${verdict.reason}; ` +
         `read-only commands (git status/diff/log/show, grep, ls, cat, cw ...) and test/build ` +
         `commands stay available.`,
     };
@@ -456,7 +488,7 @@ export function evaluateMutation(input: MutationCheckInput): MutationDecision {
   return {
     decision: 'deny',
     kind,
-    missingGates: [...new Set([...missing.values()].flat())],
+    missingGates: gateNames,
     runId: (owned ?? blocking[0]!).run.runId,
     reason:
       `${base} This write was refused because ${detail}. ` +

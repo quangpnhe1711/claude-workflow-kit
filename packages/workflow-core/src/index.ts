@@ -1,4 +1,5 @@
 export * from './types.js';
+export * from './mission.js';
 export * from './loader.js';
 export * from './state-machine.js';
 export * from './store.js';

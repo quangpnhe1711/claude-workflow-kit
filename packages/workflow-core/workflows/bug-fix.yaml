@@ -54,6 +54,7 @@ nodes:
 
   - id: implementation
     label: Implementation
+    implementation: true
     skill: wf-implement
     description: Smallest safe fix that addresses the root cause, not the symptom.
 

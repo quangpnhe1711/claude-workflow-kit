@@ -24,6 +24,7 @@ nodes:
 
   - id: fix
     label: Fix
+    implementation: true
     skill: wf-quick-fix
     description: Smallest causal change. No unrelated refactor, no optional improvements.
 

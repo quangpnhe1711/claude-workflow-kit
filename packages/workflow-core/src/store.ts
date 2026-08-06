@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { MISSION_STATES } from './mission.js';
 import {
   DEFAULT_CONFIG,
   type InvalidArtifact,
@@ -138,6 +139,20 @@ export function listRunIds(paths: RuntimePaths): string[] {
 function normaliseRun(run: RunState): RunState {
   if (!run.lastSemanticAt) run.lastSemanticAt = run.updatedAt ?? run.startedAt;
   if (!Array.isArray(run.artifacts)) run.artifacts = [];
+  // A mission written by an older kit may lack collections added later. Reading
+  // them as empty is correct; leaving them undefined makes every consumer guard.
+  if (run.mission) {
+    const mission = run.mission;
+    mission.confidence ??= {};
+    mission.evidence ??= {};
+    mission.risks ??= [];
+    mission.decisions ??= [];
+    mission.tasks ??= [];
+    mission.checkpoints ??= [];
+    mission.deliverables ??= [];
+    mission.scopeChanges ??= [];
+    mission.acceptances ??= [];
+  }
   return run;
 }
 
@@ -186,6 +201,25 @@ export function validateRunState(parsed: unknown): string | undefined {
   if (!isPlainObject(parsed['agents'])) return '"agents" must be an object';
   if (!(parsed['nodes'] as Record<string, unknown>)[parsed['currentNode'] as string]) {
     return `currentNode "${String(parsed['currentNode'])}" has no entry in "nodes"`;
+  }
+  const mission = parsed['mission'];
+  if (mission !== undefined) {
+    if (!isPlainObject(mission)) return '"mission" must be an object';
+    if (!MISSION_STATES.includes(mission['state'] as never)) {
+      return `unknown mission state "${String(mission['state'])}"`;
+    }
+    // A mission whose collections are not collections would read as an empty
+    // board — the one failure mode that looks like a healthy run.
+    for (const key of ['risks', 'decisions', 'tasks', 'checkpoints', 'deliverables'] as const) {
+      if (mission[key] !== undefined && !Array.isArray(mission[key])) {
+        return `"mission.${key}" must be an array`;
+      }
+    }
+    for (const key of ['confidence', 'evidence'] as const) {
+      if (mission[key] !== undefined && !isPlainObject(mission[key])) {
+        return `"mission.${key}" must be an object`;
+      }
+    }
   }
   return undefined;
 }

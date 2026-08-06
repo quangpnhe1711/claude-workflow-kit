@@ -64,6 +64,10 @@ export function parseWorkflow(source: string, origin: string): WorkflowDefinitio
     if (defaultSkipped !== undefined && typeof defaultSkipped !== 'boolean') {
       throw new WorkflowDefinitionError(`${origin}: nodes[${i}].defaultSkipped must be a boolean`);
     }
+    const implementation = o['implementation'];
+    if (implementation !== undefined && typeof implementation !== 'boolean') {
+      throw new WorkflowDefinitionError(`${origin}: nodes[${i}].implementation must be a boolean`);
+    }
     return {
       id: nodeId,
       label: typeof o['label'] === 'string' ? o['label'] : nodeId,
@@ -72,6 +76,7 @@ export function parseWorkflow(source: string, origin: string): WorkflowDefinitio
       gate: o['gate'] as string | undefined,
       advisory: advisory as boolean | undefined,
       defaultSkipped: defaultSkipped as boolean | undefined,
+      implementation: implementation as boolean | undefined,
       skill: o['skill'] as string | undefined,
       agent: o['agent'] as string | undefined,
       artifacts: parseArtifacts(o, `${origin}: nodes[${i}]`),
@@ -103,6 +108,11 @@ export function parseWorkflow(source: string, origin: string): WorkflowDefinitio
     if (n.defaultSkipped === true && n.kind !== 'phase') {
       throw new WorkflowDefinitionError(
         `${origin}: only phase nodes may declare defaultSkipped`,
+      );
+    }
+    if (n.implementation !== undefined && n.kind !== 'phase') {
+      throw new WorkflowDefinitionError(
+        `${origin}: only phase nodes may declare implementation`,
       );
     }
   }
