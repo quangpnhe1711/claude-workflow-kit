@@ -5,6 +5,10 @@ controlled for high-risk changes, with standardized reports and a live diagram.*
 
 Claude Workflow Kit installs into any repository and adds:
 
+- **Mission Control routing** — a task is classified by type, complexity and risk, then routed to the shortest safe workflow (Lightning, Fast, Standard, Deep, Research); see [§22](#22-mission-control);
+- **evidence and confidence gates** — the implementation phase is refused while evidence is missing or contradictory, a threshold is unmet, or a CRITICAL risk is open;
+- **human checkpoints with teeth** — a pending or unopened mandatory checkpoint denies repository writes, on every topology, not just the gated ones;
+- **an interactive Mission Board** — approve, reject, ask for more evidence, pause, resume or cancel from the monitor, without typing a command;
 - **L0-L3 task routing** — trivial and small work stay small; full gates are L3-only;
 - **analysis-first handoff** — free-form business/source analysis stops for approval, then feeds feature implementation without repeating discovery;
 - **proportional verification** — targeted tests first, E2E only when risk justifies it;
@@ -36,7 +40,7 @@ Requirements: Node.js ≥ 18.17, Claude Code, git.
 | [5. Core rules](#5-core-rules) | what is enforced, and how strictly |
 | [6. Workflow guide](#6-workflow-guide) | `/quick-fix`, `/feature-change`, `/bug-fix`, `/work`, … |
 | [7. Phase by phase](#7-phase-by-phase) | the real graph, every phase explained |
-| [8. Skills reference](#8-skills-reference) | all 22 skills |
+| [8. Skills reference](#8-skills-reference) | all 24 skills |
 | [9. How context flows](#9-how-context-flows) | artifacts between phases |
 | [10. `.ai-workflow` explained](#10-ai-workflow-explained) | files, and what to commit |
 | [11. Conventions](#11-conventions) | the repository knowledge cache |
@@ -50,6 +54,7 @@ Requirements: Node.js ≥ 18.17, Claude Code, git.
 | [19. Development guide](#19-development-guide) | for maintainers |
 | [20. Extending the toolkit](#20-extending-the-toolkit) | new workflow / skill / phase |
 | [21. Known limitations](#21-known-limitations) | honest list |
+| [22. Mission Control](#22-mission-control) | routing, checkpoints, monitors, the board |
 
 ---
 
@@ -396,6 +401,20 @@ Written only by skills, through `cw`.
 comments, tests and database changes, in `.ai-workflow/conventions/`, so it is
 discovered once rather than re-derived per task.
 
+**Mission** — the Tech Lead layer over a run: its classification (task type,
+complexity, risk, workflow class), plan, evidence status, confidence per
+dimension, risks, decisions, task breakdown, deliverables and checkpoints. Stored
+inside the run's `state.json`, written only through `cw mission …`. See
+[§22](#22-mission-control).
+
+**Checkpoint** — a state the mission stops in because only the user may decide.
+Unlike a gate, it is not tied to the topology, so it works on `quick-fix` and
+`standard-change` too; while one is pending, repository writes are denied.
+
+**Mission Board** — the organised view of all of that (`cw board`, or the right
+panel in the monitor), including the buttons that approve, reject, pause, resume
+or cancel.
+
 ---
 
 ## 5. Core rules
@@ -489,6 +508,12 @@ for correctness or safety of the approved task.
 
 Classify the task before choosing depth. A one-line UI fix does not need a full
 workflow; a bounded FE+BE change still does not automatically need L3 gates.
+
+Mission Control does this classification for you and prints what it decided —
+`cw mission route --type … --complexity …` shows the same answer without touching
+a run. The class names below map onto these topologies: Lightning and Fast →
+`quick-fix`, Standard → `standard-change`, Deep → `bug-fix`/`feature-change`,
+Research → `solution-analysis`. See [§22](#22-mission-control).
 
 | Workflow | Phases | Gates | Typical cost |
 | --- | --- | --- | --- |
@@ -989,14 +1014,14 @@ of restarting.
 
 ## 8. Skills reference
 
-22 skills ship in the `senior-dev` preset. "User can call?" reflects the actual
+24 skills ship in the `senior-dev` preset. "User can call?" reflects the actual
 frontmatter: entry points are marked `disable-model-invocation: true` (you type
 them, the model cannot invoke them), `wf-*` step skills are marked
 `user-invocable: false` (the reverse).
 
 | Skill | User can call? | Purpose | Called by | Main output |
 | --- | :---: | --- | --- | --- |
-| `work` | ✅ | Classify L0-L3; route one workflow or report-only request | you | invokes one matching body |
+| `work` | ✅ | Mission Control router: classify type/complexity/risk, publish the Mission Header, route one body | you | invokes one matching body |
 | `solution-analysis` | ✅ | Free-form business/source/impact/solution analysis | you | six artifacts + `ANALYSIS_READY` |
 | `quick-fix` | ✅ | Entry point for the short workflow | you | invokes `wf-quick-fix` |
 | `feature-change` | ✅ | Risk-adaptive feature/change entry | you | quick / standard / full feature body |
@@ -1018,6 +1043,8 @@ them, the model cannot invoke them), `wf-*` step skills are marked
 | `wf-validation-e2e` | ❌ | Risk-based validation; optional E2E | L3 bodies | `validation.md` |
 | `wf-product-assessment` | ❌ | Post-implementation, evidence-backed findings | both bodies | `assessment.md` |
 | `wf-final-report` | ❌ | Quick/detailed report router | workflows or report-only request | template-backed report when requested |
+| `wf-mission-board` | ❌ | Keep the board honest: state, action, confidence, evidence, risk, tasks, off-track, context | every body | an accurate `cw board` |
+| `wf-checkpoint` | ❌ | Open/resolve human checkpoints; record decisions with evidence and alternatives | every body | `CHECKPOINT_*` + `DECISION_RECORDED` |
 
 ### Context each step receives and produces
 
@@ -1327,6 +1354,9 @@ demonstrably follows.
 command: `--project <dir>`, `--runtime <dir>`, `--session <id>`, `--json`.
 `cw --help` prints the full list.
 
+Mission Control commands (`cw mission …`, `cw checkpoint …`, `cw board`) are
+listed in [§22.8](#228-command-summary).
+
 ### Run
 
 | Command | Purpose |
@@ -1616,6 +1646,18 @@ persisted to `policy-health.json` as `DEGRADED`, which `cw policy` reports,
 /wf-status
 ```
 
+**See where the mission stands, and what it is waiting for**
+
+```bash
+cw board          # classification, monitors, the open checkpoint, blockers
+```
+
+**Answer the question it is blocked on**
+
+Answer in chat, or click Approve / Modify / Reject / More evidence on the Mission
+Board in the monitor. A pending checkpoint denies repository writes until you do
+— that is the point ([§22.14](#2214-answering-a-checkpoint)).
+
 You do **not** need to prescribe phases. The router classifies risk, stops
 investigation when evidence is enough, reuses local/cached conventions, and
 chooses targeted, integration, manual, or E2E verification proportionally.
@@ -1898,6 +1940,593 @@ edit, not a code change.
 - **One preset ships** (`senior-dev`), and its skills are copied at install time.
   `claude-workflow-kit update` refreshes only hash-proven unmodified framework
   files; customized or ambiguous legacy files are preserved and reported.
+
+---
+
+## 22. Mission Control
+
+Mission Control is the layer that decides *how much workflow* a task deserves and
+then holds the work to it. The topology answers "which phase is this run in"; the
+mission answers what a Tech Lead actually asks: what kind of task is this, how
+deep a process does it need, what evidence exists, how confident is the
+conclusion, which risks are live, and what still needs a human decision.
+
+Everything here lives inside the same run (`state.json`) and is written only
+through `cw mission …` / `cw checkpoint …`.
+
+**Reference:** [22.1 router](#221-the-router) ·
+[22.2 checkpoints](#222-checkpoints-have-teeth) ·
+[22.3 evidence & confidence](#223-evidence-confidence-and-the-implementation-gate) ·
+[22.4 monitors](#224-monitors) · [22.5 the board](#225-the-board) ·
+[22.6 mission state](#226-mission-state) ·
+[22.7 deliverables](#227-deliverables-and-completion) ·
+[22.8 commands](#228-command-summary)
+
+**Guide:** [22.9 day-to-day](#229-day-to-day-who-does-what) ·
+[22.10 Lightning](#2210-worked-example-a--lightning-a-label) ·
+[22.11 Standard](#2211-worked-example-b--standard-with-a-checkpoint) ·
+[22.12 Deep](#2212-worked-example-c--deep-with-a-gate-and-checkpoints) ·
+[22.13 Research](#2213-worked-example-d--research-no-code) ·
+[22.14 answering](#2214-answering-a-checkpoint) ·
+[22.15 reading the board](#2215-reading-the-board) ·
+[22.16 when it blocks you](#2216-when-it-blocks-you) ·
+[22.17 upgrading](#2217-upgrading-an-existing-install) ·
+[22.18 tuning](#2218-tuning) ·
+[22.19 limits](#2219-what-mission-control-does-not-do)
+
+### 22.1 The router
+
+```bash
+# dry run: what would this task cost?
+cw mission route --type permission --complexity high --flags permission-or-security,cache-invalidation
+```
+
+```text
+workflow    DEEP (feature-change)
+risk        HIGH
+effort      VERY_LARGE
+checkpoints PLAN, INVESTIGATION, ARCHITECTURE, DESIGN, HIGH_RISK, CODE, RELEASE
+validation  build, compile, unit-test, integration-test, scoped-regression, permission-test, security-review
+skipped     type-check, targeted-static-check, …, migration-check, rollback-check
+thresholds  requirement>=70% scope>=70% businessRule>=80% architecture>=80% design>=70% implementation>=75%
+template    permission-report.md
+reason      complexity HIGH -> DEEP
+```
+
+`cw mission classify` records the same decision on the run, and escalates the run
+in place when the routed topology is deeper than the current one — same run id,
+same evidence directory, same event history.
+
+| Class | Topology | For |
+| --- | --- | --- |
+| `LIGHTNING` | `quick-fix` | label, copy, CSS, spacing, icon, static content |
+| `FAST` | `quick-fix` | small validation, small CRUD/API, bounded defect |
+| `STANDARD` | `standard-change` | multi-file or multi-layer bounded change |
+| `DEEP` | `bug-fix` / `feature-change` | permission, security, migration, architecture, wide refactor |
+| `RESEARCH` | `solution-analysis` | analyse, compare, recommend; no code is written |
+
+**Complexity sets the floor; nothing lowers it.** Declared risk, high-risk task
+types (`security`, `permission`, `authentication`, `authorization`, `migration`,
+`architecture`) and the structural flags can only raise the class. A user asking
+for a deeper path always wins. The single exception is `--flags analysis-only`,
+which routes to `RESEARCH` because nothing is built.
+
+Structural flags: `database-change`, `api-contract-change`,
+`permission-or-security`, `migration`, `backward-compatibility`,
+`data-loss-risk`, `production-impact`, `multi-module`, `architecture-change`,
+`analysis-only`, `review-before-apply`, `deployment`, `cache-invalidation`,
+`breaking-change`, `multiple-solutions`.
+
+### 22.2 Checkpoints have teeth
+
+The mandatory checkpoint list is *derived* from the classification, so it cannot
+be argued away. Kinds: `PLAN`, `INVESTIGATION`, `ROOT_CAUSE`, `ARCHITECTURE`,
+`DESIGN`, `HIGH_RISK`, `CODE`, `RELEASE`.
+
+```bash
+cw checkpoint open DESIGN --summary "two export contracts are plausible" \
+  --decision "rename the field or keep the legacy one" \
+  --recommend "keep the legacy field, add the new one" --risk medium --confidence 80
+
+cw checkpoint resolve CP-001 --action approve --note "keep the legacy field"
+```
+
+While any of these is true, the `PreToolUse` hook denies repository writes and
+non-read-only commands — on `quick-fix` and `standard-change` as much as on the
+gated L3 topologies:
+
+- a blocking checkpoint is `PENDING` (every kind except `RELEASE`);
+- a *mandatory* pre-implementation checkpoint was never opened;
+- the mission is `PAUSED`;
+- an evidence area the mission itself marked `MISSING`, `CONFLICTING` or `OUTDATED`.
+
+Read-only investigation, test/build commands and `cw` itself keep working — the
+mission is expected to keep gathering evidence while it waits.
+
+`reject` and `modify` require a note. Only the user's answer closes a checkpoint,
+from chat or from the board. Silence is never approval.
+
+### 22.3 Evidence, confidence and the implementation gate
+
+Evidence status per area: `NOT_REQUIRED`, `MISSING`, `PARTIAL`, `SUFFICIENT`,
+`CONFLICTING`, `OUTDATED`. `PARTIAL` warns; `MISSING`/`CONFLICTING`/`OUTDATED`
+block.
+
+Confidence dimensions: `requirement`, `scope`, `businessRule`, `architecture`,
+`rootCause`, `design`, `implementation`, `testing`, `release`. Floors scale with
+depth, so a label change never owes six numbers:
+
+| Class | Floors |
+| --- | --- |
+| `LIGHTNING` / `RESEARCH` | `requirement` 70, `scope` 70 |
+| `FAST` | + `implementation` 75 |
+| `STANDARD` | + `businessRule` 70, `design` 70 |
+| `DEEP` | + `architecture` 60 |
+| any defect | + `rootCause` 75 |
+| permission / security | `businessRule` and `architecture` raised to 80 |
+
+`cw phase enter implementation` (or `fix`) is refused while any floor is unmet, a
+dimension is unassessed, evidence is blocking, a checkpoint is unanswered, or a
+`CRITICAL` risk is open:
+
+```text
+cw: entering "implementation" is refused; the mission is not ready:
+  - required DESIGN checkpoint was never opened
+  - confidence design is 60% (needs >= 70%)
+Resolve them, or take them on deliberately: cw mission accept-risk --reason "<why>"
+```
+
+`cw mission accept-risk --reason "…"` is the "Proceed Anyway" of the spec: it
+waives exactly the blockers that are listed at that moment, records them as the
+user's decision, and keeps showing them as accepted risk on the board. It is not
+a way to pass a *gate* — `BUSINESS_READY` and `ROOT_CAUSE_READY` still need
+`cw gate pass` with their evidence, or an audited `cw gate override`.
+
+Which node counts as "implementation" is data: a workflow YAML phase may declare
+`implementation: true`, and the conventional ids `implementation` and `fix` are
+recognised by default.
+
+### 22.4 Monitors
+
+| Monitor | What it reports | How |
+| --- | --- | --- |
+| Risk | live risks with category, level, trigger, mitigation, and the highest level ever reached | `cw mission risk …` |
+| Off-track | investigation has left the mission scope | `cw mission offtrack OFF_TRACK …` |
+| Context | the mission can no longer explain its own decisions; a recovery summary | `cw mission context --summary "…" --degraded` |
+| Health | `HEALTHY` → `NEEDS_ATTENTION` → `AT_RISK` → `BLOCKED` → `CRITICAL`, derived from the others | `cw board` |
+| Progress | weighted by task weight, not task count | `cw mission task add --weight n` |
+
+Risk escalation follows the spec: LOW → MEDIUM warns, MEDIUM → HIGH should open a
+checkpoint, HIGH → CRITICAL blocks implementation until it is mitigated or
+explicitly accepted. Lowering a risk later never erases `peakLevel`.
+
+### 22.5 The board
+
+```bash
+cw board            # organised state: classification, monitors, checkpoints, blockers
+cw board --json     # the same view for tooling
+cw status           # run + phase + a mission summary
+```
+
+In the monitor UI the right-hand panel *is* the board: mission state, progress,
+health with its reasons, the pending checkpoint with Approve / Modify / Reject /
+More-evidence, blockers with "Proceed anyway", confidence against thresholds,
+evidence, risks, task breakdown with per-task skip, decisions, plan, deliverables,
+and Pause / Resume / Cancel. Selecting a phase in the diagram swaps the panel for
+the phase detail.
+
+Board actions POST to `/api/runs/<id>/actions`:
+
+```
+checkpoint.approve | checkpoint.reject | checkpoint.modify | checkpoint.cancel
+checkpoint.request-evidence
+mission.pause | mission.resume | mission.cancel | mission.accept-risk
+mission.return-to-scope | mission.add-to-scope | mission.state
+task.skip
+```
+
+Reads stay open (`access-control-allow-origin: *`) because this is local
+telemetry, but **writes are same-origin only**: any page the user has open could
+otherwise POST to localhost and approve a checkpoint on their behalf. A request
+carrying a foreign `Origin` gets `403`; a tool with no `Origin` (curl, a script)
+is allowed, because it already has the shell access to run `cw` directly.
+
+### 22.6 Mission state
+
+```
+RECEIVED → CLASSIFYING → PLANNING → WAITING_PLAN_APPROVAL → INVESTIGATING →
+WAITING_INVESTIGATION_APPROVAL → DESIGNING → WAITING_DESIGN_APPROVAL →
+READY_TO_IMPLEMENT → IMPLEMENTING → WAITING_CODE_APPROVAL → VALIDATING →
+WAITING_RELEASE_APPROVAL → DELIVERING → COMPLETED
+                              PAUSED | BLOCKED | CANCELLED | FAILED
+```
+
+Illegal jumps are refused (`PLANNING → IMPLEMENTING`), and `--force` records the
+jump as forced rather than hiding it. `INVESTIGATING → IMPLEMENTING` *is* legal,
+because Lightning and Fast have no design stage. Waiting states, pause, block,
+cancel and fail are reachable from any live state — the user's control does not
+depend on the phase. A paused mission leaves only through `cw mission resume`,
+which restores the state it stood in.
+
+The mission state follows the phase automatically, except while a checkpoint is
+pending: the board must keep saying it is waiting on the user until the user
+answers. When a forced state and the topology disagree, `cw board` prints the
+drift instead of picking a winner.
+
+### 22.7 Deliverables and completion
+
+```bash
+cw mission deliverable "Manual test checklist" --reason "UI verification is manual"
+cw mission deliverable "Manual test checklist" --status DONE --location "final response"
+cw mission deliverable "Changelog" --not-required --reason "internal change"
+```
+
+`cw run complete` already verifies gates, phases, artifacts and end reachability;
+with a mission it also refuses while a checkpoint is unanswered, a required
+deliverable is not `DONE`, a `CRITICAL` risk is open, or the mission is paused or
+cancelled. `cw mission cancel --reason "…"` retires the run as `ABANDONED` —
+cancelled never reads as success.
+
+### 22.8 Command summary
+
+| Command | Purpose |
+| --- | --- |
+| `cw mission route --type … --complexity …` | Dry-run the router |
+| `cw mission classify --type … --complexity … [--flags …] [--risk …] [--class …] [--no-route]` | Record the classification; escalate the run if the route is deeper |
+| `cw mission plan --objective "…" --scope "a,b" [--out-of-scope …] [--assumptions …] [--dependencies …] [--stop-conditions …] [--success …]` | Persist the Execution Plan |
+| `cw mission state <STATE> [--force] [--message "…"]` | Move the mission state |
+| `cw mission pause [--reason "…"]` / `resume` / `cancel --reason "…"` | Human control |
+| `cw mission confidence <dimension> <0-100> [--note "…"]` | Record confidence |
+| `cw mission evidence <category> <STATUS> [--note "…"]` | Record evidence status |
+| `cw mission risk --category … --level … --trigger "…" [--mitigation …] [--status …]` | Record or update a risk |
+| `cw mission decision --decision "…" --reason "…" [--evidence …] [--alternatives …] [--rejected …] [--reversibility …]` | Record a decision |
+| `cw mission task add --epic "…" --title "…" [--weight n] [--reason "…"]` | Add a task (a reason is required after the plan) |
+| `cw mission task <id> <STATUS>` | Move a task |
+| `cw mission offtrack ON_TRACK\|OFF_TRACK [--expected …] [--actual …] [--reason …]` | Off-track monitor |
+| `cw mission context [--summary "…"] [--coverage n] [--questions "a;b"] [--degraded]` | Context recovery |
+| `cw mission scope --previous "…" --new "…" --reason "…"` | Record a scope change |
+| `cw mission deliverable <name> [--not-required] [--status …] [--location …]` | Deliverables contract |
+| `cw mission action "<what is happening now>"` | Current Action on the board |
+| `cw mission accept-risk --reason "…" [--blockers "a;b"]` | "Proceed Anyway", audited |
+| `cw mission template [--type <taskType>]` | Report template for the task type |
+| `cw mission show [--json]` | The mission record |
+| `cw checkpoint open <KIND> --summary "…" --decision "…" [--recommend …] [--alternatives …] [--evidence …] [--risk …] [--impact …] [--confidence n]` | Open a checkpoint |
+| `cw checkpoint resolve <id> --action approve\|reject\|modify\|cancel [--note "…"]` | Record the user's answer |
+| `cw checkpoint list [--json]` | Every checkpoint and its status |
+| `cw board [--json]` | The Mission Board |
+
+### 22.9 Day-to-day: who does what
+
+You type a task. Claude classifies, plans, and works. You answer checkpoints.
+Nobody has to remember the command list — this is what actually happens:
+
+| Step | Who | What |
+| --- | --- | --- |
+| 1 | you | `/work <task>` (or `/quick-fix`, `/feature-change`, `/bug-fix`, `/solution-analysis`) |
+| 2 | Claude | classifies type + complexity + structural flags, asks `cw mission route` |
+| 3 | Claude | prints the **Mission Header** and starts the run |
+| 4 | you | glance at the header: wrong depth is cheapest to fix here |
+| 5 | Claude | investigates, records evidence, confidence, risks, decisions |
+| 6 | Claude | opens a checkpoint when a decision is yours; the editor is now blocked |
+| 7 | you | answer in chat, or click on the Mission Board |
+| 8 | Claude | implements only after the readiness check passes |
+| 9 | Claude | validates by the strategy the router picked, then reports |
+
+The Mission Header you should see before any work starts:
+
+```text
+Mission: Add tenant filtering to the order export.
+Task type: api-change   Subtypes: export
+Complexity: MEDIUM   Risk: MEDIUM
+Workflow: STANDARD (standard-change)
+Reason: API contract changes; impact stays inside the export module.
+Required steps: targeted impact -> implement -> unit + integration + scoped regression
+Skipped steps: security review, performance check, migration check, E2E
+Checkpoints: PLAN, DESIGN
+Deliverables: code, targeted tests, manual test checklist
+Effort: MEDIUM (engineering effort, not a completion promise)
+Next action: read the export service and its API contract
+```
+
+If that header says `LIGHTNING` for a permission change, or `DEEP` for a label
+change, correct it in one sentence — "this touches the permission cache" — and
+Claude re-classifies. The router escalates the same run in place; nothing is lost.
+
+### 22.10 Worked example A — Lightning (a label)
+
+```text
+/work
+Đổi label "Submit" thành "Gửi yêu cầu" ở màn hình Contact Request.
+```
+
+What Claude runs, in order:
+
+```bash
+cw run start quick-fix --label "rename Submit on Contact Request"
+cw mission classify --type text-label --complexity trivial
+# -> LIGHTNING (quick-fix), 0 checkpoints, validation: build, compile, type-check
+cw mission plan --objective "rename the submit label" --scope "contact-request screen" \
+  --out-of-scope "no API or validation change"
+cw phase enter triage
+cw mission confidence requirement 95
+cw mission confidence scope 90
+cw phase enter fix          # allowed: both floors are met
+cw phase enter validate
+cw run complete
+```
+
+What you get: the change, a build result, and a two-line manual check. No
+investigation document, no checkpoint, no regression suite. Total mission
+overhead: two confidence numbers.
+
+If the same string turns out to be shared by four screens, Claude records it and
+raises the class instead of quietly editing all four:
+
+```bash
+cw mission offtrack OFF_TRACK --expected "contact request screen" \
+  --actual "shared i18n bundle used by 4 screens" --reason "the label is a shared key"
+cw run escalate standard-change --reason "shared i18n key affects 4 screens"
+```
+
+### 22.11 Worked example B — Standard, with a checkpoint
+
+```text
+/work
+Export đơn hàng phải lọc theo tenant. Field cũ trong API đang là customer_id.
+```
+
+```bash
+cw run start standard-change --label "tenant filter on order export"
+cw mission classify --type api-change --complexity medium --flags api-contract-change
+```
+
+```text
+workflow    STANDARD (standard-change)
+risk        MEDIUM
+checkpoints PLAN, DESIGN
+validation  build, compile, unit-test, integration-test, scoped-regression, api-contract-check
+thresholds  requirement>=70% scope>=70% businessRule>=70% design>=70% implementation>=75%
+template    implementation-report.md
+```
+
+Two checkpoints are now **mandatory**, so the editor is already blocked:
+
+```text
+Blocked by claude-workflow-kit: run sc-20260805-001 (standard-change): required PLAN
+checkpoint was never opened; required DESIGN checkpoint was never opened. Nothing in the
+repository may change until those clear. Inspect it with: cw board.
+```
+
+That is the design: Claude investigates read-only, then asks.
+
+```bash
+cw checkpoint open PLAN --summary "export filter touches the API contract and 2 callers" \
+  --decision "approve this scope, or limit it to the internal report only"
+```
+
+You answer — in chat ("approved, both callers") or by clicking **Approve** on the
+board. Then the design question, which is the one that actually matters:
+
+```bash
+cw checkpoint open DESIGN \
+  --summary "customer_id is consumed by the partner integration" \
+  --decision "rename customer_id to tenant_id, or add tenant_id and keep the old field" \
+  --recommend "add tenant_id, keep customer_id for one release" \
+  --alternatives "rename now (breaking);add and deprecate (compatible)" \
+  --evidence "partner-api/client.ts:41 reads customer_id" \
+  --risk medium --confidence 82
+```
+
+After both are approved, confidence is recorded and the phase opens:
+
+```bash
+cw mission evidence api SUFFICIENT
+cw mission evidence backend SUFFICIENT
+cw mission confidence requirement 90
+cw mission confidence scope 85
+cw mission confidence businessRule 85
+cw mission confidence design 85
+cw mission confidence implementation 80
+cw phase enter implementation      # now allowed
+```
+
+### 22.12 Worked example C — Deep, with a gate *and* checkpoints
+
+Permission work routes to `DEEP`, which means the V1 hard gates **and** the V2
+checkpoints apply. They are different mechanisms and both must clear:
+
+```bash
+cw run start feature-change --label "UI visibility per data group"
+cw mission classify --type permission --complexity high \
+  --flags permission-or-security,cache-invalidation,multi-module
+# -> DEEP (feature-change): PLAN, INVESTIGATION, ARCHITECTURE, DESIGN, HIGH_RISK, CODE, RELEASE
+```
+
+| Mechanism | Cleared by | Needs |
+| --- | --- | --- |
+| `BUSINESS_READY` (gate) | `cw gate pass BUSINESS_READY` | `business-decision.md` on disk, from the `business` phase |
+| `PLAN` / `INVESTIGATION` / … (checkpoints) | `cw checkpoint resolve … --action approve` | the user's answer |
+| confidence floors | `cw mission confidence …` | `businessRule` and `architecture` at **80%** here |
+
+A risk found mid-investigation escalates on the record, and CRITICAL stops the
+work outright:
+
+```bash
+cw mission risk --id R-001 --category cache --level MEDIUM \
+  --trigger "permissions are cached per session"
+cw mission risk --id R-001 --category cache --level CRITICAL \
+  --trigger "the cache is shared across tenants" --evidence "PermissionCache.ts:88"
+# -> implementation is refused until it is mitigated or explicitly accepted
+cw mission risk --id R-001 --category cache --level CRITICAL --status MITIGATED \
+  --mitigation "invalidate per tenant on role change"
+```
+
+Lowering the level later never erases `peakLevel`: the board still shows the risk
+reached CRITICAL.
+
+### 22.13 Worked example D — Research (no code)
+
+```text
+/solution-analysis
+So sánh 2 cách làm audit log: bảng riêng vs event stream. Chưa cần code.
+```
+
+```bash
+cw run start solution-analysis --label "audit log approach"
+cw mission classify --type research --complexity medium --flags analysis-only
+# -> RESEARCH (solution-analysis); validation: none — nothing is built
+```
+
+The run produces the six analysis artifacts, records confidence per dimension,
+and stops at `ANALYSIS_READY`. Nothing in the repository changes. Implementation
+starts only after `cw analysis approve` + `cw analysis handoff`, which creates a
+trace-linked `feature-change` run — see [§6](#6-workflow-guide).
+
+### 22.14 Answering a checkpoint
+
+**In chat** — just answer. Claude records it:
+
+```bash
+cw checkpoint resolve CP-002 --action approve --note "add tenant_id, keep customer_id"
+```
+
+**On the board** — open the monitor (`cw monitor`, default
+`http://127.0.0.1:4173`), select the run, and use the checkpoint card:
+
+| Button | Effect |
+| --- | --- |
+| **Approve** | mission continues to the next state |
+| **Modify** | goes back to the phase that produced it; the note says what to change (note required) |
+| **Reject** | same, with the decision refused (note required) |
+| **More evidence** | recorded as a rejection whose note is the gap to close (note required) |
+| **Proceed anyway** | waives the listed blockers as your decision, permanently visible as accepted risk |
+| **Pause / Resume** | freezes the repository, then restores the exact state |
+| **Cancel mission** | retires the run as `ABANDONED` — never as success (reason required) |
+
+Whatever you type in the note box is sent with the click, so the reason lands in
+the event log instead of only in your memory.
+
+### 22.15 Reading the board
+
+```bash
+cw board
+```
+
+```text
+mission     sc-20260805-001 — tenant filter on order export
+state       WAITING_DESIGN_APPROVAL (run RUNNING)
+workflow    STANDARD via standard-change — api-change
+sizing      complexity MEDIUM risk MEDIUM effort MEDIUM
+phase       Targeted Impact
+action      Reading partner-api/client.ts
+progress    45% (5/11 tasks, weighted)
+health      BLOCKED — checkpoint CP-002 (DESIGN) is awaiting the user
+confidence  requirement=90% scope=85% design=60%<70!
+evidence    api=SUFFICIENT backend=SUFFICIENT test=PARTIAL
+
+CHECKPOINT CP-002 [DESIGN] — decision required
+  summary     customer_id is consumed by the partner integration
+  decision    rename customer_id to tenant_id, or add tenant_id and keep the old field
+  recommended add tenant_id, keep customer_id for one release
+  …
+```
+
+| Field | Read it as |
+| --- | --- |
+| `state` | mission lifecycle; `WAITING_*` means it is your turn |
+| `drift` | the phase and the recorded state disagree — usually a forced state |
+| `progress` | `(x/y tasks, weighted)` is real work; `(from mission state)` means no breakdown exists yet |
+| `health` | `BLOCKED` = a human decision is open; `AT_RISK` = an open HIGH risk or contradictory evidence; `CRITICAL` = an open CRITICAL risk |
+| `confidence` | `design=60%<70!` means below its floor — implementation is refused |
+| `evidence` | `MISSING`/`CONFLICTING`/`OUTDATED` deny writes; `PARTIAL` only warns |
+| `IMPLEMENTATION BLOCKED` | the exact list the readiness check refuses on |
+| `actions` | what the board will accept right now |
+
+`cw status` gives the same summary in three lines; `cw board --json` is the full
+structure for tooling.
+
+### 22.16 When it blocks you
+
+Mission Control is *supposed* to block. These are the messages and what each one
+actually needs:
+
+| Message | Meaning | Do |
+| --- | --- | --- |
+| `required PLAN checkpoint was never opened` | the classification made it mandatory | `cw checkpoint open PLAN …`, then answer it |
+| `checkpoint CP-001 (DESIGN) is awaiting the user` | your turn | answer in chat or on the board |
+| `mission is PAUSED: <reason>` | someone paused it | `cw mission resume` |
+| `evidence backend is CONFLICTING` | the mission itself flagged contradictory evidence | resolve it, then `cw mission evidence backend SUFFICIENT` |
+| `confidence design has not been assessed` | no number recorded | `cw mission confidence design <n>` — or accept the risk |
+| `confidence design is 60% (needs >= 70%)` | genuinely not understood yet | investigate, or `cw mission accept-risk --reason "…"` |
+| `CRITICAL risk R-001 … is unresolved` | a stop condition | mitigate (`--status MITIGATED`) or accept explicitly |
+| `required deliverable "…" is PENDING` | `cw run complete` refuses | produce it, then `cw mission deliverable "…" --status DONE` |
+| `mission state PAUSED -> VALIDATING is not a legal transition` | a paused mission only leaves via resume | `cw mission resume` |
+| `a task added after the plan needs --reason` | scope movement without a stated cause | add the reason, or leave it out of scope |
+| `Blocked by claude-workflow-kit: … unpassed gate BUSINESS_READY` | a V1 **gate**, not a checkpoint | `cw gate pass BUSINESS_READY` with its artifact, or `cw gate override … --reason` |
+
+Nothing here is worked around by retrying the edit or by finding another shell:
+the policy covers file writers, MCP write tools and command tools alike
+([§15](#15-gate-enforcement-and-limitations)).
+
+### 22.17 Upgrading an existing install
+
+```bash
+npm i -D claude-workflow-kit@latest
+npx claude-workflow-kit update
+npx claude-workflow-kit doctor
+```
+
+`update` refreshes only framework files it can prove are unmodified; anything you
+customised is preserved and reported as a conflict to merge by hand. What V2 adds
+to an existing project:
+
+- two skills — `wf-mission-board`, `wf-checkpoint`;
+- a rewritten `work` skill (the router);
+- ten report templates (existing project templates always win);
+- new `CLAUDE.md` sections inside the managed block;
+- `implementation: true` on the implementation phase of the shipped workflows.
+
+Runs created before V2 keep working: `mission` is optional, and a run without one
+behaves exactly as it did in V1 — no checkpoints, no thresholds, gates unchanged.
+
+If you maintain a **project-specific workflow** in `.ai-workflow/workflows/`, mark
+its implementing phase so the readiness check knows where the repository starts
+changing:
+
+```yaml
+- id: build-it
+  label: Implementation
+  implementation: true
+```
+
+Without it, the fallback recognises only the conventional ids `implementation`
+and `fix`.
+
+### 22.18 Tuning
+
+| Want | How |
+| --- | --- |
+| a deeper workflow than the router picked | say so, or `cw mission classify … --class deep` |
+| a shallower one | not possible by design — reduce the *facts*: if it truly has no permission impact, do not declare the flag |
+| skip a checkpoint | there is no skip; `cw checkpoint resolve <id> --action approve` is the honest version, and it is recorded |
+| proceed with a known gap | `cw mission accept-risk --reason "…"` |
+| different confidence floors | not configurable: they are derived per workflow class in `mission.ts` (see [§22.3](#223-evidence-confidence-and-the-implementation-gate)) |
+| gate enforcement off entirely | `enforceGates: false` in `.ai-workflow/config.json` — the whole policy, including checkpoints; `cw policy` then reports `DISABLED` |
+| a different report template | `cw mission template --type <taskType>`, or ask for the deliverable you want |
+
+### 22.19 What Mission Control does not do
+
+- It does not read minds: classification comes from the request, and a wrong flag
+  produces a wrong depth. `cw mission route` is cheap — check it.
+- It does not verify a confidence number. A model that invents 90% gets past the
+  floor; the floor exists to make the *unassessed* case block, and to make the
+  accepted-risk case visible.
+- It does not enforce checkpoint *quality*. Opening a checkpoint with no real
+  decision behind it satisfies the runtime and wastes the user's attention.
+- It does not replace the L3 hard gates. `BUSINESS_READY` and `ROOT_CAUSE_READY`
+  still need their evidence artifact on disk; `accept-risk` cannot open them.
+- Board actions are not authenticated beyond same-origin: anyone who can reach
+  `127.0.0.1` with a shell can already run `cw`.
 
 ---
 

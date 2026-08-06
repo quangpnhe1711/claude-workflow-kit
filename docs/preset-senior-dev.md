@@ -26,6 +26,15 @@ The preset is a direct port of an existing per-project Claude Code setup
 | `.claude/skills/wf-product-assessment` | same | Artifact path made concrete. |
 | `.claude/skills/wf-final-report` | same | Quick/detailed router; reuses project report templates. |
 | — | `skills/wf-status` | New. Resume/inspect the current run. |
+| — | `skills/wf-mission-board` | New (V2). Which mission commands to emit and when; off-track and context monitors; how to resume from the board. |
+| — | `skills/wf-checkpoint` | New (V2). When a checkpoint is mandatory, how to open and resolve it, and the decision-record contract. |
+
+`skills/work` was rewritten for V2: it now classifies task type, complexity and
+structural flags, asks `cw mission route` for the depth, publishes the Mission
+Header, and routes to one body. The L0-L3 ladder survives under the
+Lightning/Fast/Standard/Deep names. The body skills gained a short Mission Control
+block each: which classification to record, which confidence dimensions the
+implementation phase will demand, and which checkpoints the router made mandatory.
 
 ## Agents
 
@@ -41,9 +50,17 @@ use, convention-cache reuse, manual-verification semantics, quick/detailed
 reporting, and the `cw` state-reporting contract. The policy is self-contained
 and depends on no external output-compression plugin.
 
+The V2 sections added to the managed block are Mission Control (routing, the
+Mission Header, board upkeep), evidence/confidence/risk as gates, human
+checkpoints, scope and off-track discipline, and the final-delivery contract.
+
 Report, intake, and solution-analysis artifact structures live under
 `templates/` and install into `.ai-workflow/templates/`. Existing project
-templates are reused on update.
+templates are reused on update. V2 added the output-template library the router
+selects from: `text-label.md`, `ui-change.md`, `css-layout.md`,
+`permission-report.md`, `architecture-report.md`, `refactor-report.md`,
+`research-report.md`, `documentation-report.md`, plus `execution-plan.md` and
+`decision-record.md` as deliverable structures.
 
 ## Deliberately not extracted
 

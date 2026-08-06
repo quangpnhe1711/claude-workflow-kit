@@ -98,7 +98,32 @@ step('install into a clean project copy', () => {
   assert.ok(existsSync(join(project, '.ai-workflow', 'config.json')));
   assert.ok(existsSync(join(project, '.ai-workflow', 'templates', 'implementation-report.md')));
 
+  // Mission Control ships with the preset: its two skills and the templates the
+  // router can select. A missing template makes `cw mission template` a dead end.
+  for (const skill of ['wf-mission-board', 'wf-checkpoint']) {
+    assert.ok(existsSync(join(project, '.claude', 'skills', skill, 'SKILL.md')), `${skill} installed`);
+  }
+  for (const template of [
+    'text-label.md',
+    'ui-change.md',
+    'css-layout.md',
+    'permission-report.md',
+    'research-report.md',
+    'architecture-report.md',
+    'refactor-report.md',
+    'documentation-report.md',
+    'execution-plan.md',
+    'decision-record.md',
+  ]) {
+    assert.ok(
+      existsSync(join(project, '.ai-workflow', 'templates', template)),
+      `template ${template} installed`,
+    );
+  }
+
   const claudeMd = readFileSync(join(project, 'CLAUDE.md'), 'utf8');
+  assert.ok(claudeMd.includes('### Mission Control'), 'the V2 rules are in the managed block');
+  assert.ok(claudeMd.includes('cw checkpoint open'), 'checkpoint protocol is in the rules');
   assert.ok(claudeMd.includes('This line exists to prove the installer merges'), 'user content survived');
   assert.ok(claudeMd.includes('NO BUSINESS DECISION = NO CODING in an L3 run.'), 'managed block injected');
 
@@ -1044,6 +1069,194 @@ step('standard-change is installed as the gate-free L2 path', () => {
     cw('phase', 'complete');
   }
   cw('run', 'complete');
+});
+
+// --- mission control (V2) -------------------------------------------------
+
+step('a classified mission routes, checkpoints and blocks the editor', () => {
+  cw('run', 'start', 'standard-change', '--force', '--reason', 'e2e mission probe', '--label', 'tenant export filter');
+
+  // Routing: an API contract change floors at Standard and owes PLAN + DESIGN.
+  const classified = cw(
+    'mission',
+    'classify',
+    '--type',
+    'api-change',
+    '--complexity',
+    'medium',
+    '--flags',
+    'api-contract-change',
+  ).stdout;
+  assert.match(classified, /workflow\s+STANDARD \(standard-change\)/);
+  assert.match(classified, /checkpoints PLAN, DESIGN/);
+  assert.match(classified, /template\s+implementation-report\.md/);
+  assert.equal(state().mission.state, 'PLANNING');
+
+  cw(
+    'mission',
+    'plan',
+    '--objective',
+    'filter exports by tenant',
+    '--scope',
+    'export service,api',
+    '--out-of-scope',
+    'no schema change',
+  );
+
+  // A required checkpoint that was never opened denies repository writes, even
+  // though this topology has no hard gate at all.
+  const denied = hookDecision({
+    hook_event_name: 'PreToolUse',
+    session_id: 'mission',
+    tool_name: 'Edit',
+    tool_input: { file_path: join(project, 'src', 'orders.js') },
+  });
+  assert.equal(denied.decision, 'deny', 'a mission checkpoint must have the same teeth as a gate');
+  assert.match(denied.reason, /required PLAN checkpoint was never opened/);
+  assert.match(denied.reason, /cw board/);
+
+  // Read-only work and `cw` itself stay available while the user is asked.
+  assert.equal(
+    hookDecision({
+      hook_event_name: 'PreToolUse',
+      session_id: 'mission',
+      tool_name: 'Bash',
+      tool_input: { command: 'git diff && cw board' },
+    }).decision,
+    'allow',
+  );
+
+  cw('checkpoint', 'open', 'PLAN', '--summary', 'scope of the export change', '--decision', 'approve the scope');
+  cw('checkpoint', 'open', 'DESIGN', '--summary', 'two contracts', '--decision', 'rename or keep the legacy field');
+  assert.equal(state().mission.checkpoints.length, 2);
+  assert.equal(state().mission.state, 'WAITING_DESIGN_APPROVAL');
+
+  const board = cw('board').stdout;
+  assert.match(board, /CHECKPOINT CP-001 \[PLAN\] — decision required/);
+  assert.match(board, /IMPLEMENTATION BLOCKED/);
+  assert.match(cw('status').stdout, /waiting\s+checkpoint CP-001/);
+});
+
+step('the Mission Board answers a checkpoint over HTTP, and only same-origin', async () => {
+  const { startMonitor } = await import(
+    pathToFileURL(join(repoRoot, 'packages', 'monitor-server', 'dist', 'index.js')).href
+  );
+  const boardMonitor = startMonitor({ projectRoot: project, port: 4903, pollMs: 200 });
+  try {
+    const runId = state().runId;
+    const snapshot = await fetch('http://127.0.0.1:4903/api/state').then((r) => r.json());
+    const view = snapshot.runs.find((r) => r.runId === runId);
+    assert.equal(view.missionSummary.state, 'WAITING_DESIGN_APPROVAL');
+    assert.equal(view.missionSummary.pendingCheckpoints, 2);
+    assert.equal(view.missionSummary.health, 'BLOCKED');
+
+    const detail = await fetch(`http://127.0.0.1:4903/api/runs/${runId}`).then((r) => r.json());
+    assert.equal(detail.board.pendingCheckpoints.length, 2);
+    assert.equal(detail.board.readiness.ok, false);
+
+    // Any page the user has open could POST to localhost, so a cross-origin
+    // write is refused before it can approve anything on their behalf.
+    const foreign = await fetch(`http://127.0.0.1:4903/api/runs/${runId}/actions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+      body: JSON.stringify({ action: 'checkpoint.approve', checkpointId: 'CP-001' }),
+    });
+    assert.equal(foreign.status, 403, 'cross-origin board actions must be refused');
+    assert.equal(state().mission.checkpoints[0].status, 'PENDING');
+
+    // Rejecting without a note is refused with the reason, not silently ignored.
+    const noNote = await fetch(`http://127.0.0.1:4903/api/runs/${runId}/actions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4903' },
+      body: JSON.stringify({ action: 'checkpoint.reject', checkpointId: 'CP-001' }),
+    });
+    assert.equal(noNote.status, 400);
+    assert.match((await noNote.json()).error, /note/);
+
+    for (const id of ['CP-001', 'CP-002']) {
+      const res = await fetch(`http://127.0.0.1:4903/api/runs/${runId}/actions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4903' },
+        body: JSON.stringify({ action: 'checkpoint.approve', checkpointId: id, note: 'approved in review' }),
+      });
+      assert.equal(res.status, 200, `approving ${id} over HTTP`);
+    }
+    const answered = state();
+    assert.deepEqual(
+      answered.mission.checkpoints.map((c) => c.status),
+      ['APPROVED', 'APPROVED'],
+    );
+    assert.equal(answered.mission.checkpoints[0].respondedVia, 'board');
+    assert.equal(answered.mission.state, 'READY_TO_IMPLEMENT');
+
+    // Pausing from the board stops the repository again.
+    await fetch(`http://127.0.0.1:4903/api/runs/${runId}/actions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4903' },
+      body: JSON.stringify({ action: 'mission.pause', reason: 'lunch' }),
+    });
+    const paused = hookDecision({
+      hook_event_name: 'PreToolUse',
+      session_id: 'mission',
+      tool_name: 'Edit',
+      tool_input: { file_path: join(project, 'src', 'orders.js') },
+    });
+    assert.equal(paused.decision, 'deny');
+    assert.match(paused.reason, /mission is PAUSED: lunch/);
+
+    await fetch(`http://127.0.0.1:4903/api/runs/${runId}/actions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:4903' },
+      body: JSON.stringify({ action: 'mission.resume' }),
+    });
+    assert.equal(state().mission.state, 'READY_TO_IMPLEMENT');
+  } finally {
+    await boardMonitor.close();
+  }
+});
+
+step('confidence thresholds gate the implementation phase, and are auditable', () => {
+  cw('phase', 'enter', 'impact');
+  const refused = run(cwBin, ['--project', project, 'phase', 'enter', 'implementation'], {
+    allowFailure: true,
+  });
+  assert.equal(refused.status, 1, 'implementation without assessed confidence is refused');
+  assert.match(refused.stderr, /confidence requirement has not been assessed/);
+  assert.match(refused.stderr, /cw mission accept-risk/);
+
+  for (const dimension of ['requirement', 'scope', 'businessRule', 'design', 'implementation']) {
+    cw('mission', 'confidence', dimension, '88');
+  }
+  cw('phase', 'enter', 'implementation');
+  assert.equal(state().currentNode, 'implementation');
+  assert.equal(state().mission.state, 'IMPLEMENTING');
+  assert.equal(
+    hookDecision({
+      hook_event_name: 'PreToolUse',
+      session_id: 'mission',
+      tool_name: 'Edit',
+      tool_input: { file_path: join(project, 'src', 'orders.js') },
+    }).decision,
+    'allow',
+    'an approved, confident mission may finally edit source',
+  );
+
+  // Deliverables are part of "done", so a missing required one blocks completion.
+  cw('mission', 'deliverable', 'Manual test checklist', '--reason', 'UI verification is manual');
+  cw('phase', 'complete');
+  cw('phase', 'enter', 'validation');
+  cw('phase', 'complete');
+  const premature = run(cwBin, ['--project', project, 'run', 'complete'], { allowFailure: true });
+  assert.equal(premature.status, 1);
+  assert.match(premature.stderr, /required deliverable "Manual test checklist" is PENDING/);
+
+  cw('mission', 'deliverable', 'Manual test checklist', '--status', 'DONE', '--location', 'final response');
+  const runId = state().runId;
+  cw('run', 'complete');
+  const finished = JSON.parse(cw('run', 'show', '--run', runId, '--json').stdout);
+  assert.equal(finished.status, 'COMPLETED');
+  assert.equal(finished.mission.state, 'COMPLETED');
+  assert.ok(!existsSync(join(project, '.ai-workflow', 'current-run')));
 });
 
 step('uninstall leaves the project clean', () => {

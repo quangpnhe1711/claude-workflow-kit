@@ -8,6 +8,15 @@ Phase 1 deliverable. Written before implementation.
 > hard-gated bug/feature topologies are reserved for L3. Verification is
 > risk-based, E2E is conditional even in L3, and reporting independently selects
 > quick output or one of nine installed templates.
+>
+> **Mission Control (2026-08-05).** A mission layer now sits on top of the same
+> five topologies: task-type/complexity/risk routing to Lightning, Fast, Standard,
+> Deep or Research; derived mandatory checkpoints that deny repository writes while
+> unanswered; evidence and confidence thresholds enforced at the implementation
+> phase; risk, off-track, context and health monitors; and an interactive Mission
+> Board in the monitor. Decisions D26-D31 record why each part is shaped the way it
+> is. The L0-L3 vocabulary below still holds — it is the same ladder under the
+> Lightning/Fast/Standard/Deep names.
 
 ## 1. Extracted current workflow (source: `D:\lvn-erp`)
 
@@ -202,6 +211,69 @@ SHA-256 hashes, then waits at `ANALYSIS_READY`. Explicit approval persists the
 chosen solution and scope. Handoff creates a `feature-change` with
 `sourceAnalysisRunId`; valid artifacts skip evidence/business/readiness, while a
 stale source snapshot leaves `BUSINESS_READY` open and blocks implementation.
+
+**D26 — The mission is a layer on the run, not a second store.**
+Classification, plan, evidence status, confidence, risks, decisions, task
+breakdown, checkpoints and deliverables live in `RunState.mission`, so they
+inherit the atomic write, the append-only event log, the session ownership rules
+and the corrupt-state boundary that already exist. A second file would have needed
+all four again, and could disagree with the run it describes. `mission` is
+optional: every run written before V2 stays readable, and `validateRunState`
+rejects an invented mission state or a non-array collection as corrupt, because a
+mission whose `risks` is a string would render as a clean board.
+
+**D27 — Routing is derived, and depth can only go up.**
+`routeMission` maps (task type, subtypes, complexity, declared risk, structural
+flags) to a workflow class and a topology. Complexity sets the floor; risk,
+high-risk task types and structural facts raise it; nothing lowers it, and an
+explicit user request for a deeper path always wins. The mandatory checkpoint
+list, the validation steps and the confidence floors are computed from the same
+input rather than remembered by a skill — a prose rule that every workflow body
+has to re-implement is a rule that erodes. Five classes reuse the existing five
+topologies (Lightning/Fast → `quick-fix`, Standard → `standard-change`, Deep →
+`bug-fix`/`feature-change`, Research → `solution-analysis`) instead of adding new
+graphs that would duplicate them.
+
+**D28 — Checkpoints are enforced by the mutation policy, not by prose.**
+A pending blocking checkpoint, a mandatory pre-implementation checkpoint that was
+never opened, a paused mission, or evidence the mission itself marked
+`MISSING`/`CONFLICTING`/`OUTDATED` all deny repository writes and non-read-only
+commands, exactly like an unpassed gate. This is what makes V2 real on the
+gate-free topologies: without it, `standard-change` could print "checkpoint
+required" and keep editing. `RELEASE` is deliberately non-blocking (it gates the
+release step, and blocking it would stop the run writing its own release
+evidence), and `CODE` is excluded from the never-opened check because it is
+answered *after* code exists — requiring it earlier would deadlock.
+
+**D29 — Confidence gates the phase, not every keystroke.**
+Numbers below a floor, and unassessed dimensions, are checked when the
+implementation phase is entered; they are not part of the mutation policy. A
+confidence score is a judgment the model keeps revising, and denying every write
+on an unassessed dimension would fire before the mission had any chance to assess
+it. Floors scale with workflow class so a Lightning label change owes two numbers,
+not six — ceremony proportional to a trivial task is how a workflow gets skipped
+wholesale. `cw mission accept-risk --reason "…"` waives exactly the blockers
+listed at that moment and keeps them visible as accepted risk; it can never open a
+hard gate, which still needs its evidence artifact or an audited override.
+
+**D30 — Board writes are same-origin; board reads are not.**
+`/api/state` keeps `access-control-allow-origin: *` because it is local telemetry,
+but `POST /api/runs/:id/actions` refuses a request carrying a foreign `Origin`:
+any page the user has open could otherwise approve a checkpoint on their behalf,
+with no credentials involved. A request with no `Origin` at all (curl, a script) is
+allowed — it already has the shell access to run `cw` directly. Every action maps
+to exactly one runtime call with the same requirements as the CLI (a rejection
+needs a note, a cancellation needs a reason), and the response is the refreshed
+run detail so the board shows the result of the click rather than waiting a poll.
+
+**D31 — Mission state follows the phase, except while the user is being asked.**
+`syncMissionState` advances the mission when a phase is entered, so the board does
+not depend on a skill remembering a second command — but never while a checkpoint
+is pending, because the board must keep saying it is waiting on the user until the
+user answers. Illegal jumps are refused, `--force` records the jump as forced, and
+a forced state that the topology contradicts is reported as drift instead of being
+resolved in either direction. A paused mission leaves only through `resume`, which
+restores the state it stood in rather than guessing a forward one.
 
 **D25 — Installer ownership is hash-based and legacy-safe.**
 New manifests record hashes for framework-owned skills, agents, and hooks.
