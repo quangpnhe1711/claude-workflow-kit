@@ -6,6 +6,12 @@ import type {
 
 export type { RunState, WorkflowDefinition, WorkflowEvent, WorkflowNode, WorkflowEdge, NodeState, ClaudeStatus } from '@claude-workflow-kit/workflow-core';
 export type {
+  RunIndexEntry,
+  RunRollup,
+  StepRollup,
+  UsageRollup,
+} from '@claude-workflow-kit/workflow-core';
+export type {
   Checkpoint,
   CheckpointKind,
   DecisionRecord,
@@ -69,7 +75,9 @@ export interface Snapshot {
   semanticLagThresholdSeconds: number;
   currentRunId: string | null;
   workflows: WorkflowDefinition[];
+  /** Live rail: unfinished runs plus the most recent finished ones. */
   runs: RunView[];
+  totalRuns?: number;
   unreadableRuns: string[];
   quarantinedRuns?: string[];
   policyHealth?: PolicyHealthView | null;
@@ -80,9 +88,62 @@ export interface RunDetail {
   run: RunView;
   workflow: WorkflowDefinition;
   events: WorkflowEvent[];
+  eventBytes?: number;
   artifacts: string[];
   /** Mission Board, or null for a run that never classified. */
   board: import('@claude-workflow-kit/workflow-core').MissionBoardView | null;
+  rollup: import('@claude-workflow-kit/workflow-core').RunRollup | null;
+}
+
+export interface RunPage {
+  runs: import('@claude-workflow-kit/workflow-core').RunIndexEntry[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface EventPage {
+  runId: string;
+  events: WorkflowEvent[];
+  cursor: number;
+  size: number;
+  hasMore: boolean;
+}
+
+export interface WorkflowStat {
+  workflow: string;
+  runs: number;
+  completed: number;
+  failed: number;
+  abandoned: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  medianDurationMs: number | null;
+}
+
+export interface SkillStat {
+  skill: string;
+  runs: number;
+  completed: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  lastRunAt: string | null;
+}
+
+export interface Analytics {
+  totalRuns: number;
+  active: number;
+  blocked: number;
+  completed: number;
+  failed: number;
+  abandoned: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  medianDurationMs: number | null;
+  workflows: WorkflowStat[];
+  skills: SkillStat[];
+  usage: { available: boolean; totalTokens: number | null; estimatedCost: number | null };
+  generatedAt: string;
 }
 
 /** One Mission Board action, as the POST body the monitor server expects. */

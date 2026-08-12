@@ -4,11 +4,14 @@ import {
   derivedRunStatus,
   derivedSemanticStatus,
   implementationReadiness,
+  isTerminalRun,
   missionHealthReport,
   missionProgress,
   pendingCheckpoints,
   type MissionBoardView,
   type PolicyHealth,
+  type RunIndexEntry,
+  type RunRollup,
   type RunState,
   type WorkflowDefinition,
   type WorkflowEvent,
@@ -48,7 +51,14 @@ export interface MonitorSnapshot {
   semanticLagThresholdSeconds: number;
   currentRunId: string | null;
   workflows: WorkflowDefinition[];
+  /**
+   * Live rail only: every unfinished run plus the most recent finished ones.
+   * History is answered by `/api/runs`, which reads the derived index instead of
+   * every `state.json` — this payload is rebuilt every second.
+   */
   runs: RunView[];
+  /** Runs in the index, so the UI can say "showing 12 of 840". */
+  totalRuns: number;
   /** Runs whose state.json could not be read. Surfaced, never hidden. */
   unreadableRuns: string[];
   /** Unreadable runs that were retired on purpose. */
@@ -64,11 +74,22 @@ export interface MonitorSnapshot {
 export interface RunDetail {
   run: RunView;
   workflow: WorkflowDefinition;
+  /** Newest events, for the activity feed. Full history: `/api/runs/:id/events`. */
   events: WorkflowEvent[];
+  /** Byte size of the event log — the cursor space for paging the timeline. */
+  eventBytes: number;
   artifacts: string[];
   /** Mission Board for this run, or null when the run never classified. */
   board: MissionBoardView | null;
+  /** Derived counts. Never authoritative; `null` if the fold failed. */
+  rollup: RunRollup | null;
 }
+
+/** How many finished runs the live snapshot carries alongside the active ones. */
+export const RECENT_RUNS_IN_SNAPSHOT = 15;
+
+/** Newest events returned with a run detail before the client starts paging. */
+export const DETAIL_EVENT_TAIL = 120;
 
 function missionSummary(run: RunState): MissionSummary | undefined {
   const mission = run.mission;
@@ -107,13 +128,37 @@ function view(run: RunState, stall: number, lag: number, now: string): RunView {
   };
 }
 
+/**
+ * The live payload, rebuilt every second.
+ *
+ * It deliberately does not carry history: an unfinished run is loaded in full
+ * (the diagram needs it), while finished runs are represented by the most recent
+ * few. Loading every `state.json` each tick is what made the monitor scale with
+ * the size of the archive rather than with the work in progress.
+ */
 export function buildSnapshot(runtime: WorkflowRuntime): MonitorSnapshot {
   const now = new Date().toISOString();
   const threshold = runtime.config.stallThresholdSeconds;
   const lag = runtime.config.semanticLagThresholdSeconds;
   const unreadableRuns: string[] = [];
-  const runs = runtime
-    .runIds()
+
+  // The index says which runs are still live without deserialising any of them.
+  const index = runtime.syncIndex();
+  const current = runtime.currentRunId() ?? null;
+  const wanted = new Set<string>();
+  for (const entry of index) {
+    if (!isTerminalRun(entry.status)) wanted.add(entry.runId);
+  }
+  if (current) wanted.add(current);
+  for (const entry of index.filter((e) => isTerminalRun(e.status)).slice(0, RECENT_RUNS_IN_SNAPSHOT)) {
+    wanted.add(entry.runId);
+  }
+  // A run the index has not seen yet (just created, or an index that was wiped)
+  // must still appear; falling back to the directory listing keeps the live rail
+  // correct even with no index at all.
+  if (!index.length) for (const id of runtime.runIds()) wanted.add(id);
+
+  const runs = [...wanted]
     .map((id) => {
       try {
         return runtime.run(id);
@@ -132,9 +177,10 @@ export function buildSnapshot(runtime: WorkflowRuntime): MonitorSnapshot {
     runtimeDir: runtime.paths.runtimeDir,
     stallThresholdSeconds: threshold,
     semanticLagThresholdSeconds: lag,
-    currentRunId: runtime.currentRunId() ?? null,
+    currentRunId: current,
     workflows: [...runtime.workflows().values()],
     runs,
+    totalRuns: Math.max(index.length, runs.length),
     unreadableRuns: unreadableRuns.filter((id) => !quarantinedRuns.includes(id)),
     quarantinedRuns,
     policyHealth: runtime.policyHealth() ?? null,
@@ -152,14 +198,147 @@ export function buildRunDetail(runtime: WorkflowRuntime, runId: string): RunDeta
     runtime.config.semanticLagThresholdSeconds,
     now,
   );
+  let rollup: RunRollup | null = null;
+  try {
+    rollup = runtime.rollup(runId);
+  } catch {
+    // A run whose log cannot be folded still has a diagram and a board.
+    rollup = null;
+  }
+
   return {
     run: runView,
     workflow,
-    events: runtime.events(runId, 500),
+    events: runtime.events(runId, DETAIL_EVENT_TAIL),
+    eventBytes: rollup?.eventBytes ?? 0,
     artifacts: runtime.artifacts(runId),
     board: run.mission
       ? buildMissionBoard(run, workflow, { runStatus: runView.derivedStatus })
       : null,
+    rollup,
+  };
+}
+
+// ---- analytics -------------------------------------------------------------
+
+export interface WorkflowStat {
+  workflow: string;
+  runs: number;
+  completed: number;
+  failed: number;
+  abandoned: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  medianDurationMs: number | null;
+}
+
+export interface SkillStat {
+  skill: string;
+  runs: number;
+  completed: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  lastRunAt: string | null;
+}
+
+export interface Analytics {
+  totalRuns: number;
+  active: number;
+  blocked: number;
+  completed: number;
+  failed: number;
+  abandoned: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  medianDurationMs: number | null;
+  workflows: WorkflowStat[];
+  skills: SkillStat[];
+  /** Usage stays unavailable until a real source is wired up. Never zero. */
+  usage: { available: boolean; totalTokens: number | null; estimatedCost: number | null };
+  generatedAt: string;
+}
+
+function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle]! : Math.round((sorted[middle - 1]! + sorted[middle]!) / 2);
+}
+
+function average(values: number[]): number | null {
+  if (!values.length) return null;
+  return Math.round(values.reduce((sum, v) => sum + v, 0) / values.length);
+}
+
+/** A rate over runs that actually finished; unfinished runs are not failures. */
+function rate(entries: RunIndexEntry[]): number | null {
+  const finished = entries.filter((e) => ['COMPLETED', 'FAILED', 'ABANDONED'].includes(e.status));
+  if (!finished.length) return null;
+  return finished.filter((e) => e.status === 'COMPLETED').length / finished.length;
+}
+
+function durations(entries: RunIndexEntry[]): number[] {
+  return entries.map((e) => e.durationMs).filter((d): d is number => typeof d === 'number' && d > 0);
+}
+
+/**
+ * Aggregates over the derived index. Every number traces back to a persisted
+ * run; anything the runtime cannot measure (tokens, cost) stays null.
+ */
+export function buildAnalytics(runtime: WorkflowRuntime): Analytics {
+  const entries = runtime.syncIndex();
+  const byWorkflow = new Map<string, RunIndexEntry[]>();
+  const bySkill = new Map<string, RunIndexEntry[]>();
+  for (const entry of entries) {
+    byWorkflow.set(entry.workflow, [...(byWorkflow.get(entry.workflow) ?? []), entry]);
+    for (const skill of entry.skills) {
+      bySkill.set(skill, [...(bySkill.get(skill) ?? []), entry]);
+    }
+  }
+
+  const usageEntries = entries.filter((e) => e.usageAvailable);
+  return {
+    totalRuns: entries.length,
+    active: entries.filter((e) => !['COMPLETED', 'FAILED', 'ABANDONED'].includes(e.status)).length,
+    blocked: entries.filter((e) => e.pendingCheckpoints > 0).length,
+    completed: entries.filter((e) => e.status === 'COMPLETED').length,
+    failed: entries.filter((e) => e.status === 'FAILED').length,
+    abandoned: entries.filter((e) => e.status === 'ABANDONED').length,
+    successRate: rate(entries),
+    averageDurationMs: average(durations(entries)),
+    medianDurationMs: median(durations(entries)),
+    workflows: [...byWorkflow.entries()]
+      .map(([workflow, list]) => ({
+        workflow,
+        runs: list.length,
+        completed: list.filter((e) => e.status === 'COMPLETED').length,
+        failed: list.filter((e) => e.status === 'FAILED').length,
+        abandoned: list.filter((e) => e.status === 'ABANDONED').length,
+        successRate: rate(list),
+        averageDurationMs: average(durations(list)),
+        medianDurationMs: median(durations(list)),
+      }))
+      .sort((a, b) => b.runs - a.runs),
+    skills: [...bySkill.entries()]
+      .map(([skill, list]) => ({
+        skill,
+        runs: list.length,
+        completed: list.filter((e) => e.status === 'COMPLETED').length,
+        successRate: rate(list),
+        averageDurationMs: average(durations(list)),
+        lastRunAt: list.map((e) => e.startedAt).sort().at(-1) ?? null,
+      }))
+      .sort((a, b) => b.runs - a.runs),
+    usage: {
+      available: usageEntries.length > 0,
+      totalTokens: usageEntries.length
+        ? usageEntries.reduce((sum, e) => sum + (e.totalTokens ?? 0), 0)
+        : null,
+      estimatedCost: usageEntries.length
+        ? usageEntries.reduce((sum, e) => sum + (e.estimatedCost ?? 0), 0)
+        : null,
+    },
+    generatedAt: new Date().toISOString(),
   };
 }
 

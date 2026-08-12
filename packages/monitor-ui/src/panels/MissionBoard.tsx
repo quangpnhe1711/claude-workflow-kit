@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { postBoardAction } from '../api';
 import { clock } from '../derive';
-import type { BoardAction, MissionBoardView, RunDetail, RunView } from '../types';
+import type { BoardAction, Checkpoint, MissionBoardView, RunDetail, RunView } from '../types';
 
 interface Props {
   run: RunView;
@@ -9,24 +9,55 @@ interface Props {
   onApplied: (detail: RunDetail) => void;
 }
 
+/** A collapsed reference section. Native <details>: no state, no library. */
+function Group({
+  title,
+  count,
+  open,
+  children,
+}: {
+  title: string;
+  count?: string | number;
+  open?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <details className="group" open={open}>
+      <summary>
+        {title}
+        {count !== undefined && count !== '' && <span className="group__count">{count}</span>}
+      </summary>
+      <div className="group__body">{children}</div>
+    </details>
+  );
+}
+
 /**
- * The Mission Board: classification, progress, monitors, decisions — and the
- * controls that let the user steer without typing a command. Every button maps to
- * one server action; nothing here decides anything on the user's behalf, and an
- * action the server refuses shows its reason instead of failing silently.
+ * The Mission Board. It answers one question first — "what does this run need
+ * from me right now?" — and keeps everything else (plan, tasks, evidence,
+ * decisions) collapsed underneath. Every button maps to one server action;
+ * nothing decides on the user's behalf, and an action the server would refuse
+ * is disabled with the reason on it rather than failing after the click.
  */
 export function MissionBoard({ run, board, onApplied }: Props) {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
 
-  const send = async (action: BoardAction): Promise<void> => {
+  const send = async (action: BoardAction, label: string): Promise<void> => {
     setBusy(action.action);
     setError(null);
+    setDone(null);
     try {
-      const detail = await postBoardAction(run.runId, { ...action, ...(note.trim() ? { note: note.trim() } : {}) });
+      const detail = await postBoardAction(run.runId, {
+        ...action,
+        ...(note.trim() ? { note: note.trim() } : {}),
+      });
       onApplied(detail);
       setNote('');
+      setDone(label);
+      window.setTimeout(() => setDone((current) => (current === label ? null : current)), 4000);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
@@ -34,69 +65,161 @@ export function MissionBoard({ run, board, onApplied }: Props) {
     }
   };
 
-  const checkpoint = board.pendingCheckpoints[0];
+  const hasNote = note.trim().length > 0;
+  const working = busy !== null;
+  const checkpoints = board.pendingCheckpoints;
   const openRisks = board.risks.filter((risk) => risk.status === 'OPEN');
+  const blocked = !board.readiness.ok;
+  const offTrack = board.offTrack?.status === 'OFF_TRACK' ? board.offTrack : null;
+  const doneTasks = board.tasks.filter((task) => task.status === 'DONE').length;
   const thresholds = board.confidenceThresholds;
 
+  // One note field for the whole board, rendered beside whichever buttons need
+  // it. Without this, actions that require a reason had nowhere to read it from.
+  const noteField = (why: string) => (
+    <>
+      <textarea
+        className="board__note"
+        placeholder="Note / reason — sent with the button you click"
+        value={note}
+        onChange={(event) => setNote(event.target.value)}
+        rows={2}
+      />
+      <p className="board__note-hint">{why}</p>
+    </>
+  );
+
+  const checkpointCard = (checkpoint: Checkpoint) => (
+    <section key={checkpoint.id} className="attention attention--decision">
+      <div className="attention__label">Decision required</div>
+      <div className="attention__title">
+        {checkpoint.kind.replace(/_/g, ' ').toLowerCase()} · {checkpoint.id}
+      </div>
+      <p className="board__summary">{checkpoint.summary}</p>
+      <p className="board__decision">{checkpoint.decisionRequired}</p>
+      {checkpoint.recommendation && (
+        <p className="board__reco">
+          <span className="dim">recommended: </span>
+          {checkpoint.recommendation}
+        </p>
+      )}
+      {checkpoint.alternatives.length > 0 && (
+        <Group title="Alternatives" count={checkpoint.alternatives.length}>
+          <ul className="detail__list">
+            {checkpoint.alternatives.map((alternative) => (
+              <li key={alternative}>{alternative}</li>
+            ))}
+          </ul>
+        </Group>
+      )}
+      {checkpoint.evidence.length > 0 && (
+        <Group title="Evidence given" count={checkpoint.evidence.length}>
+          <ul className="detail__list dim">
+            {checkpoint.evidence.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </Group>
+      )}
+      <div className="board__meta">
+        {checkpoint.risk && <span>risk {checkpoint.risk.toLowerCase()}</span>}
+        {checkpoint.confidence !== undefined && <span>confidence {checkpoint.confidence}%</span>}
+        <span>opened {clock(checkpoint.openedAt)}</span>
+      </div>
+
+      {noteField('Approve needs no note. Reject, modify and “more evidence” record yours as the reason.')}
+
+      <div className="board__actions">
+        <button
+          type="button"
+          className="btn btn--approve"
+          disabled={working}
+          onClick={() =>
+            void send({ action: 'checkpoint.approve', checkpointId: checkpoint.id }, 'Approved')
+          }
+        >
+          Approve
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={working || !hasNote}
+          title={hasNote ? undefined : 'Write a note first: modify records what to change and why.'}
+          onClick={() =>
+            void send({ action: 'checkpoint.modify', checkpointId: checkpoint.id }, 'Sent for modification')
+          }
+        >
+          Modify
+        </button>
+        <button
+          type="button"
+          className="btn btn--reject"
+          disabled={working || !hasNote}
+          title={hasNote ? undefined : 'Write a note first: a rejection records why.'}
+          onClick={() =>
+            void send({ action: 'checkpoint.reject', checkpointId: checkpoint.id }, 'Rejected')
+          }
+        >
+          Reject
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={working || !hasNote}
+          title={hasNote ? undefined : 'Write a note first: name the evidence that is missing.'}
+          onClick={() =>
+            void send(
+              { action: 'checkpoint.request-evidence', checkpointId: checkpoint.id },
+              'Asked for more evidence',
+            )
+          }
+        >
+          More evidence
+        </button>
+      </div>
+      <p className="board__hint">Repository writes stay denied until this is answered.</p>
+    </section>
+  );
+
   return (
-    <aside className="detail board">
-      <div className="detail__head">
-        <div>
-          <div className="panel__title">Mission Board</div>
-          <div className="dim">{board.title ?? board.runId}</div>
-        </div>
-        <span className={`pill pill--health_${board.health.health.toLowerCase()}`}>
-          {board.health.health.replace('_', ' ').toLowerCase()}
-        </span>
-      </div>
-
-      <dl className="detail__grid">
-        <dt>State</dt>
-        <dd>
-          {board.missionState.replace(/_/g, ' ').toLowerCase()}
-          {board.stateDrift && (
-            <span className="warn" title="The topology implies a different phase than the mission state.">
-              {' '}
-              (phase says {board.stateDrift.toLowerCase()})
-            </span>
-          )}
-        </dd>
-        <dt>Workflow</dt>
-        <dd>
-          {board.workflowClass ? `${board.workflowClass.toLowerCase()} · ${board.topology}` : board.topology}
-        </dd>
-        {board.taskType && (
-          <>
-            <dt>Task</dt>
-            <dd>
-              {board.taskType}
-              {board.subtypes.length > 0 && <span className="dim"> +{board.subtypes.join(', ')}</span>}
-            </dd>
-            <dt>Sizing</dt>
-            <dd>
-              {board.complexity?.toLowerCase()} · risk {board.riskLevel?.toLowerCase()} · effort{' '}
-              {board.effort?.replace('_', ' ').toLowerCase()}
-            </dd>
-          </>
-        )}
-        <dt>Phase</dt>
-        <dd>{board.currentPhase}</dd>
-        <dt>Action</dt>
-        <dd>{board.currentAction}</dd>
-        <dt>Progress</dt>
-        <dd>
-          {board.progress.percent}%{' '}
-          <span className="dim">
-            {board.progress.basis === 'tasks'
-              ? `(${board.progress.completedTasks}/${board.progress.totalTasks} tasks, weighted)`
-              : '(from mission state)'}
+    <div className="board">
+      <div className="board__head">
+        <div className="board__head-row">
+          <div style={{ minWidth: 0 }}>
+            <div className="board__title">{board.title ?? board.runId}</div>
+            <div className="board__where">
+              {board.missionState.replace(/_/g, ' ').toLowerCase()} · {board.currentPhase}
+              {board.stateDrift && (
+                <span className="warn" title="The topology implies a different phase than the mission state.">
+                  {' '}
+                  (phase says {board.stateDrift.toLowerCase()})
+                </span>
+              )}
+            </div>
+          </div>
+          <span
+            className={`pill pill--health_${board.health.health.toLowerCase()}`}
+            title={board.health.reasons.join('; ')}
+          >
+            {board.health.health.replace('_', ' ').toLowerCase()}
           </span>
-        </dd>
-      </dl>
+        </div>
 
-      <div className="board__bar">
-        <div className="board__bar-fill" style={{ width: `${board.progress.percent}%` }} />
+        <div className="board__bar">
+          <div className="board__bar-fill" style={{ width: `${board.progress.percent}%` }} />
+        </div>
+        <div className="board__progress">
+          <span>{board.currentAction}</span>
+          <span>
+            {board.progress.percent}%
+            {board.progress.basis === 'tasks' &&
+              ` · ${board.progress.completedTasks}/${board.progress.totalTasks} tasks`}
+          </span>
+        </div>
       </div>
+
+      {error && <div className="detail__error">{error}</div>}
+      {done && <div className="detail__ok">{done}.</div>}
 
       {board.health.reasons.length > 0 && (
         <ul className="board__reasons">
@@ -106,148 +229,133 @@ export function MissionBoard({ run, board, onApplied }: Props) {
         </ul>
       )}
 
-      {checkpoint && (
-        <section className="board__checkpoint">
-          <div className="panel__subtitle">
-            Checkpoint {checkpoint.id} · {checkpoint.kind.replace('_', ' ').toLowerCase()}
-          </div>
-          <p className="board__summary">{checkpoint.summary}</p>
-          <p className="board__decision">{checkpoint.decisionRequired}</p>
-          {checkpoint.recommendation && (
-            <p className="board__reco">
-              <span className="dim">recommended: </span>
-              {checkpoint.recommendation}
-            </p>
-          )}
-          {checkpoint.alternatives.length > 0 && (
-            <ul className="detail__list">
-              {checkpoint.alternatives.map((alternative) => (
-                <li key={alternative}>{alternative}</li>
-              ))}
-            </ul>
-          )}
-          {checkpoint.evidence.length > 0 && (
-            <ul className="detail__list dim">
-              {checkpoint.evidence.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          )}
-          <div className="dim board__meta">
-            {checkpoint.risk && <span>risk {checkpoint.risk.toLowerCase()}</span>}
-            {checkpoint.confidence !== undefined && <span>confidence {checkpoint.confidence}%</span>}
-            <span>opened {clock(checkpoint.openedAt)}</span>
-          </div>
+      {checkpoints.map(checkpointCard)}
 
-          <textarea
-            className="board__note"
-            placeholder="Note — required to reject, modify, or ask for more evidence"
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            rows={2}
-          />
-          <div className="board__actions">
-            <button
-              type="button"
-              className="btn btn--approve"
-              disabled={busy !== null}
-              onClick={() => void send({ action: 'checkpoint.approve', checkpointId: checkpoint.id })}
-            >
-              Approve
-            </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={busy !== null}
-              onClick={() => void send({ action: 'checkpoint.modify', checkpointId: checkpoint.id })}
-            >
-              Modify
-            </button>
-            <button
-              type="button"
-              className="btn btn--reject"
-              disabled={busy !== null}
-              onClick={() => void send({ action: 'checkpoint.reject', checkpointId: checkpoint.id })}
-            >
-              Reject
-            </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={busy !== null}
-              onClick={() => void send({ action: 'checkpoint.request-evidence', checkpointId: checkpoint.id })}
-            >
-              More evidence
-            </button>
-          </div>
-        </section>
-      )}
-
-      {!board.readiness.ok && (
-        <section>
-          <div className="panel__subtitle">Implementation blocked</div>
+      {blocked && (
+        <section className="attention attention--blocked">
+          <div className="attention__label">Implementation blocked</div>
           <ul className="detail__list warn">
             {board.readiness.blockers.map((blocker) => (
               <li key={blocker}>{blocker}</li>
             ))}
           </ul>
-          <button
-            type="button"
-            className="btn btn--risk"
-            disabled={busy !== null}
-            title="Records the blockers as knowingly accepted, with your note as the reason."
-            onClick={() =>
-              void send({
-                action: 'mission.accept-risk',
-                reason: note.trim() || 'accepted from the Mission Board',
-              })
-            }
-          >
-            Proceed anyway
-          </button>
+          <div className="board__actions">
+            <button
+              type="button"
+              className="btn btn--risk"
+              disabled={working}
+              title="Records the blockers as knowingly accepted, with your note as the reason."
+              onClick={() =>
+                void send(
+                  {
+                    action: 'mission.accept-risk',
+                    reason: note.trim() || 'accepted from the Mission Board',
+                  },
+                  'Blockers accepted',
+                )
+              }
+            >
+              Proceed anyway
+            </button>
+          </div>
         </section>
       )}
 
-      {Object.keys(board.confidence).length > 0 && (
-        <section>
-          <div className="panel__subtitle">Confidence</div>
-          <ul className="board__metrics">
-            {Object.entries(board.confidence).map(([dimension, value]) => {
-              const minimum = thresholds[dimension as keyof typeof thresholds];
-              const low = minimum !== undefined && (value ?? 0) < minimum;
-              return (
-                <li key={dimension} className={low ? 'warn' : undefined}>
-                  <span>{dimension}</span>
-                  <span>
-                    {value}%{minimum !== undefined && <span className="dim"> / {minimum}%</span>}
-                  </span>
-                </li>
-              );
-            })}
+      {offTrack && (
+        <section className="attention">
+          <div className="attention__label">Off track</div>
+          <p className="warn">{offTrack.reason ?? 'investigation left the mission scope'}</p>
+          {offTrack.actualScope && (
+            <p className="dim">
+              expected {offTrack.expectedScope ?? '—'} · actual {offTrack.actualScope}
+            </p>
+          )}
+          <div className="board__actions">
+            <button
+              type="button"
+              className="btn"
+              disabled={working}
+              onClick={() => void send({ action: 'mission.return-to-scope' }, 'Back on track')}
+            >
+              Return to scope
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={working || !offTrack.actualScope}
+              title={
+                offTrack.actualScope
+                  ? 'Widen the plan to the scope actually worked on; your note becomes the recorded reason.'
+                  : 'No actual scope was recorded, so there is nothing to widen the plan to.'
+              }
+              onClick={() =>
+                void send(
+                  {
+                    action: 'mission.add-to-scope',
+                    scope: offTrack.actualScope ?? '',
+                    reason: note.trim() || 'scope widened from the Mission Board',
+                  },
+                  'Scope widened',
+                )
+              }
+            >
+              Add to scope
+            </button>
+          </div>
+        </section>
+      )}
+
+      {checkpoints.length === 0 && !blocked && !offTrack && (
+        <section className="attention attention--clear">
+          Nothing is waiting on you. The run continues on its own; you will see a decision here when
+          one opens.
+        </section>
+      )}
+
+      {board.readiness.warnings.length > 0 && (
+        <Group title="Warnings" count={board.readiness.warnings.length} open={!blocked}>
+          <ul className="detail__list warn">
+            {board.readiness.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
           </ul>
-        </section>
+        </Group>
       )}
 
-      {Object.keys(board.evidence).length > 0 && (
-        <section>
-          <div className="panel__subtitle">Evidence</div>
-          <ul className="board__metrics">
-            {Object.entries(board.evidence).map(([category, record]) => (
-              <li
-                key={category}
-                className={['MISSING', 'CONFLICTING', 'OUTDATED'].includes(record.status) ? 'warn' : undefined}
-              >
-                <span>{category}</span>
-                <span title={record.note ?? ''}>{record.status.replace('_', ' ').toLowerCase()}</span>
+      {board.tasks.length > 0 && (
+        <Group title="Tasks" count={`${doneTasks}/${board.tasks.length}`} open>
+          <ul className="board__tasks">
+            {board.tasks.map((task) => (
+              <li key={task.id}>
+                <span className={`pill pill--${task.status.toLowerCase()}`}>
+                  {task.status.replace('_', ' ').toLowerCase()}
+                </span>
+                <span className="board__task-title" title={task.reason ?? task.title}>
+                  {task.epic} · {task.title}
+                </span>
+                {task.status !== 'DONE' && task.status !== 'SKIPPED' && (
+                  <button
+                    type="button"
+                    className="btn btn--tiny btn--ghost"
+                    disabled={working}
+                    title="Mark this task skipped; your note is recorded with it."
+                    onClick={() => void send({ action: 'task.skip', taskId: task.id }, 'Task skipped')}
+                  >
+                    skip
+                  </button>
+                )}
               </li>
             ))}
           </ul>
-        </section>
+        </Group>
       )}
 
       {openRisks.length > 0 && (
-        <section>
-          <div className="panel__subtitle">Risks</div>
+        <Group
+          title="Risks"
+          count={`${openRisks.length} open`}
+          open={openRisks.some((risk) => risk.level === 'HIGH' || risk.level === 'CRITICAL')}
+        >
           <ul className="detail__list">
             {openRisks.map((risk) => (
               <li key={risk.id}>
@@ -257,92 +365,48 @@ export function MissionBoard({ run, board, onApplied }: Props) {
               </li>
             ))}
           </ul>
-        </section>
+        </Group>
       )}
 
-      {board.tasks.length > 0 && (
-        <section>
-          <div className="panel__subtitle">Task breakdown</div>
-          <ul className="board__tasks">
-            {board.tasks.map((task) => (
-              <li key={task.id}>
-                <span className={`pill pill--${task.status.toLowerCase()}`}>{task.status.toLowerCase()}</span>
-                <span className="board__task-title" title={task.reason ?? ''}>
-                  {task.epic} · {task.title}
-                </span>
-                {task.status !== 'DONE' && task.status !== 'SKIPPED' && (
-                  <button
-                    type="button"
-                    className="btn btn--tiny"
-                    disabled={busy !== null}
-                    onClick={() => void send({ action: 'task.skip', taskId: task.id })}
-                  >
-                    skip
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {board.decisions.length > 0 && (
-        <section>
-          <div className="panel__subtitle">Decisions</div>
-          <ul className="detail__list">
-            {board.decisions.slice(-6).reverse().map((decision) => (
-              <li key={decision.id}>
-                <strong>{decision.id}</strong> {decision.decision}
-                <div className="dim">{decision.reason}</div>
-                {decision.rejected.length > 0 && (
-                  <div className="dim">rejected: {decision.rejected.join('; ')}</div>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {board.offTrack?.status === 'OFF_TRACK' && (
-        <section>
-          <div className="panel__subtitle">Off track</div>
-          <p className="warn">{board.offTrack.reason ?? 'investigation left the mission scope'}</p>
-          {board.offTrack.actualScope && (
-            <p className="dim">
-              expected {board.offTrack.expectedScope ?? '—'} · actual {board.offTrack.actualScope}
-            </p>
+      {(Object.keys(board.confidence).length > 0 || Object.keys(board.evidence).length > 0) && (
+        <Group title="Confidence & evidence">
+          {Object.keys(board.confidence).length > 0 && (
+            <ul className="board__metrics">
+              {Object.entries(board.confidence).map(([dimension, value]) => {
+                const minimum = thresholds[dimension as keyof typeof thresholds];
+                const low = minimum !== undefined && (value ?? 0) < minimum;
+                return (
+                  <li key={dimension} className={low ? 'warn' : undefined}>
+                    <span>{dimension}</span>
+                    <span className="board__meter">
+                      <i className={low ? 'low' : undefined} style={{ width: `${value ?? 0}%` }} />
+                    </span>
+                    <span>
+                      {value}%{minimum !== undefined && <span className="dim"> / {minimum}%</span>}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
           )}
-          <div className="board__actions">
-            <button
-              type="button"
-              className="btn"
-              disabled={busy !== null}
-              onClick={() => void send({ action: 'mission.return-to-scope' })}
-            >
-              Return to scope
-            </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={busy !== null}
-              title="Widen the scope on purpose; your note becomes the recorded reason."
-              onClick={() =>
-                void send({
-                  action: 'mission.add-to-scope',
-                  scope: board.offTrack?.actualScope ?? '',
-                  reason: note.trim() || 'scope widened from the Mission Board',
-                })
-              }
-            >
-              Add to scope
-            </button>
-          </div>
-        </section>
+          {Object.keys(board.evidence).length > 0 && (
+            <ul className="board__metrics" style={{ marginTop: 8 }}>
+              {Object.entries(board.evidence).map(([category, record]) => (
+                <li
+                  key={category}
+                  className={['MISSING', 'CONFLICTING', 'OUTDATED'].includes(record.status) ? 'warn' : undefined}
+                >
+                  <span>{category}</span>
+                  <span title={record.note ?? ''}>{record.status.replace('_', ' ').toLowerCase()}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Group>
       )}
 
       {board.plan && (
-        <section>
-          <div className="panel__subtitle">Plan</div>
+        <Group title="Plan">
           <p className="board__summary">{board.plan.objective}</p>
           <dl className="detail__grid">
             <dt>Scope</dt>
@@ -362,12 +426,30 @@ export function MissionBoard({ run, board, onApplied }: Props) {
               </>
             )}
           </dl>
-        </section>
+        </Group>
+      )}
+
+      {board.decisions.length > 0 && (
+        <Group title="Decisions" count={board.decisions.length}>
+          <ul className="detail__list">
+            {board.decisions.slice(-8).reverse().map((decision) => (
+              <li key={decision.id}>
+                <strong>{decision.id}</strong> {decision.decision}
+                <div className="dim">{decision.reason}</div>
+                {decision.rejected.length > 0 && (
+                  <div className="dim">rejected: {decision.rejected.join('; ')}</div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Group>
       )}
 
       {board.deliverables.length > 0 && (
-        <section>
-          <div className="panel__subtitle">Deliverables</div>
+        <Group
+          title="Deliverables"
+          count={`${board.deliverables.filter((d) => d.status === 'DONE').length}/${board.deliverables.length}`}
+        >
           <ul className="board__metrics">
             {board.deliverables.map((deliverable) => (
               <li key={deliverable.name} title={deliverable.reason ?? ''}>
@@ -375,22 +457,56 @@ export function MissionBoard({ run, board, onApplied }: Props) {
                   {deliverable.name}
                   {!deliverable.required && <span className="dim"> (optional)</span>}
                 </span>
-                <span>{deliverable.status.toLowerCase()}</span>
+                <span className={deliverable.status === 'DONE' ? undefined : 'dim'}>
+                  {deliverable.status.toLowerCase()}
+                </span>
               </li>
             ))}
           </ul>
-        </section>
+        </Group>
       )}
 
-      <section>
-        <div className="panel__subtitle">Mission control</div>
+      <Group title="Classification">
+        <dl className="detail__grid">
+          <dt>Workflow</dt>
+          <dd>
+            {board.workflowClass ? `${board.workflowClass.toLowerCase()} · ${board.topology}` : board.topology}
+          </dd>
+          {board.taskType && (
+            <>
+              <dt>Task type</dt>
+              <dd>
+                {board.taskType}
+                {board.subtypes.length > 0 && <span className="dim"> +{board.subtypes.join(', ')}</span>}
+              </dd>
+              <dt>Sizing</dt>
+              <dd>
+                {board.complexity?.toLowerCase()} · risk {board.riskLevel?.toLowerCase()} · effort{' '}
+                {board.effort?.replace('_', ' ').toLowerCase()}
+              </dd>
+            </>
+          )}
+          <dt>Run</dt>
+          <dd>{board.runId}</dd>
+        </dl>
+      </Group>
+
+      <Group title="Mission control" open>
+        {checkpoints.length === 0 &&
+          noteField('Pause, cancel and “proceed anyway” record this note as the reason.')}
         <div className="board__actions">
           {board.availableActions.includes('pause') && (
             <button
               type="button"
               className="btn"
-              disabled={busy !== null}
-              onClick={() => void send({ action: 'mission.pause', reason: note.trim() || 'paused from the board' })}
+              disabled={working}
+              title="Denies repository writes until you resume. Read-only work continues."
+              onClick={() =>
+                void send(
+                  { action: 'mission.pause', reason: note.trim() || 'paused from the board' },
+                  'Mission paused',
+                )
+              }
             >
               Pause
             </button>
@@ -399,8 +515,8 @@ export function MissionBoard({ run, board, onApplied }: Props) {
             <button
               type="button"
               className="btn btn--approve"
-              disabled={busy !== null}
-              onClick={() => void send({ action: 'mission.resume' })}
+              disabled={working}
+              onClick={() => void send({ action: 'mission.resume' }, 'Mission resumed')}
             >
               Resume
             </button>
@@ -409,21 +525,19 @@ export function MissionBoard({ run, board, onApplied }: Props) {
             <button
               type="button"
               className="btn btn--reject"
-              disabled={busy !== null}
-              title="Retires the run as cancelled. A note is required."
-              onClick={() => void send({ action: 'mission.cancel', reason: note.trim() })}
+              disabled={working || !hasNote}
+              title={
+                hasNote
+                  ? 'Retires the run as cancelled, with your note as the reason.'
+                  : 'Write a note first: cancelling records why the mission was withdrawn.'
+              }
+              onClick={() => void send({ action: 'mission.cancel', reason: note.trim() }, 'Mission cancelled')}
             >
               Cancel mission
             </button>
           )}
         </div>
-        <p className="dim board__hint">
-          Pausing or an open checkpoint denies repository writes until you answer. Read-only work
-          continues.
-        </p>
-      </section>
-
-      {error && <div className="detail__error">{error}</div>}
-    </aside>
+      </Group>
+    </div>
   );
 }

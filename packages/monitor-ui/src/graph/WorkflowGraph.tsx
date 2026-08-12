@@ -13,7 +13,7 @@ import { PhaseNode } from '../nodes/PhaseNode';
 import { AgentNode } from '../nodes/AgentNode';
 import { NODE_WIDTH, layout } from '../layout';
 import { buildGraphModel } from '../graphModel';
-import type { RunView, WorkflowDefinition } from '../types';
+import type { RunRollup, RunView, WorkflowDefinition } from '../types';
 
 const nodeTypes = { phase: PhaseNode, agent: AgentNode };
 
@@ -24,6 +24,8 @@ interface Props {
   stallThresholdSeconds: number;
   selectedNodeId: string | null;
   onSelectNode: (id: string) => void;
+  /** Per-step counts. Absent means "not measured", never "zero". */
+  rollup?: RunRollup | null;
 }
 
 export function WorkflowGraph({
@@ -33,6 +35,7 @@ export function WorkflowGraph({
   stallThresholdSeconds,
   selectedNodeId,
   onSelectNode,
+  rollup,
 }: Props) {
   const placement = useMemo(() => layout(workflow), [workflow]);
   const model = useMemo(
@@ -54,6 +57,7 @@ export function WorkflowGraph({
           run,
           nowMs,
           selected: selectedNodeId === item.id,
+          step: rollup?.steps[item.id],
         },
         draggable: false,
         selectable: true,
@@ -74,7 +78,7 @@ export function WorkflowGraph({
     });
 
     return list;
-  }, [model, run, nowMs, selectedNodeId, placement]);
+  }, [model, run, nowMs, selectedNodeId, placement, rollup]);
 
   const edges: Edge[] = useMemo(() => {
     const list: Edge[] = model.edges.map((edge) => ({

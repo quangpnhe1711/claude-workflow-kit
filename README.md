@@ -114,7 +114,7 @@ A healthy fresh install looks like this:
 ✓ runtimeUrl            file:///…/workflow-core/dist/index.js
 ✓ skills                22 installed
 ✓ report templates      15 installed
-✓ analysis artifact templates  six-file solution-analysis contract available
+✓ analysis artifact templates  seven-file solution-analysis contract available
 ✓ agents                3 installed
 ✓ CLAUDE.md             managed block present
 ✓ workflow definitions  bug-fix, feature-change, generic, quick-fix, solution-analysis, standard-change
@@ -301,10 +301,18 @@ a guessed phase would be a plausible lie, which is worse than a flagged gap.
 | Endpoint | Returns |
 | --- | --- |
 | `GET /api/health` | `{ ok, projectRoot }` |
-| `GET /api/state` | full snapshot: workflows, runs (with derived statuses), policy health |
-| `GET /api/runs/<runId>` | run + workflow + last 500 events + artifacts |
+| `GET /api/state` | live snapshot: workflows, unfinished runs in full plus the most recent finished ones, policy health |
+| `GET /api/runs?status=&workflow=&skill=&q=&sort=&offset=&limit=` | paged history from the derived index |
+| `GET /api/runs/<runId>` | run + workflow + newest events + artifacts + rollup |
+| `GET /api/runs/<runId>/events?after=<cursor>&limit=` | one page of the event log; `after: 0` starts at the beginning |
+| `GET /api/runs/<runId>/rollup` | folded counts for one run |
+| `GET /api/analytics` | totals, success rate, durations, per-workflow and per-skill statistics |
 | `GET /api/runs/<runId>/artifacts/<name>` | raw artifact file |
 | `GET /api/stream` | SSE `snapshot` events |
+
+The live snapshot deliberately does not carry history: it is rebuilt every
+second, so it holds work in progress, and everything older is answered from
+`/api/runs`, which reads a derived index instead of every `state.json`.
 
 ---
 
@@ -529,12 +537,46 @@ Use this when the deliverable is business analysis, source-aligned impact,
 solution comparison, and a plan—not implementation yet. Paste free-form text;
 the skill parses goal, behavior, scope, constraints, acceptance criteria, open
 questions, and assumptions. It reads the current source and convention cache,
-creates six required artifacts, then stops at `ANALYSIS_READY`.
+creates seven required artifacts, then stops at `ANALYSIS_READY`.
 
 After explicit approval, `cw analysis handoff` creates a trace-linked
 `feature-change`. A hash check of relevant source files must be `VALID` before
 `BUSINESS_READY` opens. Material changes produce `STALE`, block implementation,
 and require only the affected analysis sections to be refreshed.
+
+#### A delivered design document as source of truth
+
+When the input is a detailed design document (TKCT, BRD, spec) rather than a
+chat message, put the file in the repository first — a path outside the project
+cannot be fingerprinted — and run `/solution-analysis` on it. Alongside the usual
+artifacts the run produces `spec-map.md`, one row per verifiable requirement:
+
+```text
+| ID       | Requirement                  | Design Ref            | Code Paths         |
+| -------- | ---------------------------- | --------------------- | ------------------ |
+| SPEC-001 | Orders above 10M get 5% off  | docs/design/x.md#4.2  | src/order/price.ts |
+| SPEC-002 | Round the total down to 1000 | docs/design/x.md#4.3  | src/order/price.ts |
+```
+
+Every design document the map cites is hashed by `cw analysis ready`, whether or
+not `--source` listed it. From then on the design document is treated exactly
+like source: edit it and the linked feature run reports `STALE`, `BUSINESS_READY`
+reopens, and the affected rows must be re-checked before implementation resumes.
+
+Later work asks the map what it is bound by:
+
+```bash
+cw spec check --files "src/order/price.ts"
+# 2 requirement(s) from docs/design/x.md
+#   src/order/price.ts  SPEC-001 SPEC-002
+```
+
+`UNCOVERED` means no approved requirement claims that file — either the change
+is outside the approved scope, or the map is missing a row. Entering the
+implementation phase prints the same drift as `cw: spec drift — …` warnings:
+unclaimed requirements, changed design documents, unreadable rows. These warn and
+never block. The map is written by the same model whose work it describes, so the
+hard gate stays on the source fingerprint, where the evidence is independent.
 
 ### `/quick-fix`
 
@@ -1022,14 +1064,14 @@ them, the model cannot invoke them), `wf-*` step skills are marked
 | Skill | User can call? | Purpose | Called by | Main output |
 | --- | :---: | --- | --- | --- |
 | `work` | ✅ | Mission Control router: classify type/complexity/risk, publish the Mission Header, route one body | you | invokes one matching body |
-| `solution-analysis` | ✅ | Free-form business/source/impact/solution analysis | you | six artifacts + `ANALYSIS_READY` |
+| `solution-analysis` | ✅ | Free-form analysis, or a delivered detailed design document | you | seven artifacts + `ANALYSIS_READY` |
 | `quick-fix` | ✅ | Entry point for the short workflow | you | invokes `wf-quick-fix` |
 | `feature-change` | ✅ | Risk-adaptive feature/change entry | you | quick / standard / full feature body |
 | `bug-fix` | ✅ | Risk-adaptive defect entry | you | quick / standard / full bug body |
 | `refresh-conventions` | ✅ | Bootstrap/refresh the convention cache | you | `conventions/*.md` + `metadata.json` |
 | `wf-status` | ✅ | Report the current run, gates, next transitions | you | `cw status` interpretation |
 | `wf-feature-change` | ❌ | Full L3 feature body | `feature-change`, `work` | full evidence chain |
-| `wf-solution-analysis` | ❌ | Analysis-only workflow body | `solution-analysis`, `work` | six-file handoff contract |
+| `wf-solution-analysis` | ❌ | Analysis-only workflow body | `solution-analysis`, `work` | seven-file handoff contract |
 | `wf-feature-from-analysis` | ❌ | Freshness + approved feature continuation | approved analysis handoff | implementation without re-analysis |
 | `wf-bug-fix` | ❌ | Full L3 defect body | `bug-fix`, `work` | full evidence chain |
 | `wf-standard-change` | ❌ | Gate-free L2 body | routed entry skills | impact → implementation → proportional validation |
@@ -1371,6 +1413,9 @@ listed in [§22.8](#228-command-summary).
 | `cw run claim [<runId>] --session <id> [--force] [--reason "…"]` | Take ownership of a run |
 | `cw run transfer [<runId>] --to <sessionId> [--reason "…"]` | Hand a run to another session |
 | `cw run quarantine-current [--run <id>] --reason "…"` | Retire an unreadable run without deserialising it; files are preserved |
+| `cw rollup [--run <id>] [--json]` | Folded counts for a run: tools, files, commands, tests, governance, usage |
+| `cw index rebuild` / `cw index show` | Rebuild (or list) the derived history index used by the Run Explorer |
+| `cw usage sync [--run <id>] [--json]` | Read this run's token usage from Claude Code's session transcript; runs sync automatically when they end |
 
 ```bash
 $ cw run start feature-change --label "edit Liên lạc"
@@ -1426,11 +1471,12 @@ cw: gate "BUSINESS_READY" requires evidence from "business": missing or unusable
 | `cw policy [--json]` | Is the `PreToolUse` policy actually running? Exit 1 if `DEGRADED` |
 | `cw conventions status [--json]` | Convention cache report |
 | `cw workflows [--json]` | Available workflow definitions |
-| `cw analysis ready --source "path[,path...]"` | Validate six artifacts, snapshot relevant source, and stop for approval |
+| `cw analysis ready [--source "path[,path...]"]` | Validate seven artifacts, snapshot relevant source plus every design document `spec-map.md` cites, and stop for approval |
 | `cw analysis approve --solution "…" --scope "…"` | Persist explicit solution/scope approval |
 | `cw analysis handoff` | Create a trace-linked feature-change run; never automatic |
 | `cw analysis freshness` | Mark the linked analysis `VALID` or `STALE` from source hashes |
 | `cw analysis refresh --source "…" --reason "…"` | Record a targeted stale-analysis refresh, then recheck |
+| `cw spec check [--files "a,b"] [--json]` | Which design requirements govern those files, plus unclaimed rows and changed design documents |
 | `cw note "<message>"` | Append a note event to the run |
 | `cw artifact <filename>` | Record that an artifact was written |
 | `cw init-runtime` | Create the runtime directory skeleton |
@@ -2377,7 +2423,7 @@ cw mission classify --type research --complexity medium --flags analysis-only
 # -> RESEARCH (solution-analysis); validation: none — nothing is built
 ```
 
-The run produces the six analysis artifacts, records confidence per dimension,
+The run produces the seven analysis artifacts, records confidence per dimension,
 and stops at `ANALYSIS_READY`. Nothing in the repository changes. Implementation
 starts only after `cw analysis approve` + `cw analysis handoff`, which creates a
 trace-linked `feature-change` run — see [§6](#6-workflow-guide).

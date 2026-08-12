@@ -13,7 +13,7 @@ The preset is a direct port of an existing per-project Claude Code setup
 | `.claude/skills/bug-fix/SKILL.md` | `skills/bug-fix` | Risk-adaptive entry; full root-cause-gated body reserved for L3. |
 | — | `skills/wf-quick-fix` | L0-L1 fast path with targeted verification and requested detailed reporting. |
 | — | `skills/wf-standard-change` | New gate-free L2 targeted-impact workflow body. |
-| — | `skills/wf-solution-analysis` | Produces the six-file analysis contract and stops at `ANALYSIS_READY`. |
+| — | `skills/wf-solution-analysis` | Produces the seven-file analysis contract, including the design-to-code traceability map, and stops at `ANALYSIS_READY`. |
 | — | `skills/wf-feature-from-analysis` | Checks source freshness and continues implementation without repeating analysis. |
 | `.claude/skills/refresh-conventions/SKILL.md` | `skills/refresh-conventions` | `metadata.json` contract documented; "Javadoc" generalised to "docblock". |
 | `.claude/skills/wf-evidence-reconciliation` | same | Artifact path + `cw artifact`; delegation to `business-analyst` made explicit. |

@@ -1,17 +1,29 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { WorkflowRuntime } from '../runtime.js';
 import { runCli } from '../cli.js';
+import { SPEC_MAP_ARTIFACT } from '../spec.js';
 import { SOLUTION_ANALYSIS_ARTIFACTS } from '../types.js';
+
+const DESIGN_DOC = 'docs/design/detail.md';
+
+const SPEC_MAP = `# Traceability
+
+| ID | Requirement | Design Ref | Code Paths |
+| --- | --- | --- | --- |
+| SPEC-001 | The feature behavior stays reusable | ${DESIGN_DOC}#2.1 | feature.ts |
+`;
 
 function sandbox() {
   const dir = mkdtempSync(join(tmpdir(), 'cwk-analysis-'));
   const runtime = new WorkflowRuntime({ projectRoot: dir, runtimeDir: '.ai-workflow' });
   runtime.ensureRuntimeDir();
   writeFileSync(join(dir, 'feature.ts'), 'export const behavior = "old";\n', 'utf8');
+  mkdirSync(join(dir, 'docs', 'design'), { recursive: true });
+  writeFileSync(join(dir, DESIGN_DOC), '# Detailed design\n\n## 2.1 Behavior\n\nReusable.\n', 'utf8');
   return {
     dir,
     runtime,
@@ -25,7 +37,8 @@ function prepareAnalysis(runtime: WorkflowRuntime) {
   runtime.completePhase();
   runtime.enterPhase('analysis');
   for (const name of SOLUTION_ANALYSIS_ARTIFACTS) {
-    writeFileSync(join(runtime.paths.runDir(run.runId), name), `# ${name}\n\nEvidence.\n`, 'utf8');
+    const body = name === SPEC_MAP_ARTIFACT ? SPEC_MAP : `# ${name}\n\nEvidence.\n`;
+    writeFileSync(join(runtime.paths.runDir(run.runId), name), body, 'utf8');
     runtime.artifact(name);
   }
   return run;
@@ -41,7 +54,10 @@ test('solution analysis stops at ANALYSIS_READY with the complete artifact contr
     assert.equal(ready.status, 'WAITING_USER');
     assert.equal(ready.currentNode, 'await-approval');
     assert.equal(ready.gates['ANALYSIS_APPROVED'], 'WAITING');
-    assert.deepEqual(ready.analysis?.sourceSnapshot?.map((entry) => entry.path), ['feature.ts']);
+    assert.deepEqual(ready.analysis?.sourceSnapshot?.map((entry) => entry.path), [
+      'feature.ts',
+      DESIGN_DOC,
+    ]);
     assert.deepEqual(
       SOLUTION_ANALYSIS_ARTIFACTS.filter((name) => !ready.artifacts.includes(name)),
       [],

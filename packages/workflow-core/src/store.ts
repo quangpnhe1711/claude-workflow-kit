@@ -1,8 +1,11 @@
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -82,6 +85,17 @@ export class RuntimePaths {
   }
   eventsFile(runId: string) {
     return join(this.runDir(runId), 'events.jsonl');
+  }
+  /** Derived per-run summary. Cache only: safe to delete, rebuilt on demand. */
+  rollupFile(runId: string) {
+    return join(this.runDir(runId), 'rollup.json');
+  }
+  /** Derived read model for history. Safe to delete; `cw index rebuild` restores it. */
+  get indexDir() {
+    return join(this.runtimeDir, 'index');
+  }
+  get runIndexFile() {
+    return join(this.indexDir, 'runs.jsonl');
   }
 }
 
@@ -285,13 +299,10 @@ export function appendEvent(paths: RuntimePaths, event: WorkflowEvent): void {
   appendFileSync(paths.eventsFile(event.runId), `${JSON.stringify(event)}\n`, 'utf8');
 }
 
-export function readEvents(paths: RuntimePaths, runId: string, limit?: number): WorkflowEvent[] {
-  const file = paths.eventsFile(runId);
-  if (!existsSync(file)) return [];
-  const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
-  const slice = limit ? lines.slice(-limit) : lines;
+function parseEventLines(lines: string[]): WorkflowEvent[] {
   const events: WorkflowEvent[] = [];
-  for (const line of slice) {
+  for (const line of lines) {
+    if (!line) continue;
     try {
       events.push(JSON.parse(line) as WorkflowEvent);
     } catch {
@@ -299,6 +310,121 @@ export function readEvents(paths: RuntimePaths, runId: string, limit?: number): 
     }
   }
   return events;
+}
+
+/** Bytes of the event log. The cursor space for pagination, and the cache key. */
+export function eventsSize(paths: RuntimePaths, runId: string): number {
+  try {
+    return statSync(paths.eventsFile(runId)).size;
+  } catch {
+    return 0;
+  }
+}
+
+const TAIL_CHUNK = 64 * 1024;
+
+/**
+ * Read a window of the event log without loading the file.
+ *
+ * `events.jsonl` is append-only and unbounded, so the byte offset of a line is a
+ * stable cursor: the bytes before it never change. Reading the tail costs one
+ * chunk regardless of how long the run has been going.
+ */
+function readWindow(file: string, start: number, end: number): string {
+  const length = Math.max(0, end - start);
+  if (!length) return '';
+  const fd = openSync(file, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    let read = 0;
+    while (read < length) {
+      const n = readSync(fd, buffer, read, length - read, start + read);
+      if (n <= 0) break;
+      read += n;
+    }
+    return buffer.subarray(0, read).toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function readEvents(paths: RuntimePaths, runId: string, limit?: number): WorkflowEvent[] {
+  const file = paths.eventsFile(runId);
+  if (!existsSync(file)) return [];
+  if (limit === undefined) return parseEventLines(readFileSync(file, 'utf8').split('\n'));
+
+  // Tail: grow the window backwards until it holds enough whole lines.
+  const size = statSync(file).size;
+  let start = Math.max(0, size - TAIL_CHUNK);
+  for (;;) {
+    const text = readWindow(file, start, size);
+    const lines = text.split('\n');
+    // A window that does not begin at byte 0 starts mid-line; drop that fragment.
+    if (start > 0) lines.shift();
+    const complete = lines.filter(Boolean);
+    if (complete.length >= limit || start === 0) return parseEventLines(complete.slice(-limit));
+    start = Math.max(0, start - TAIL_CHUNK);
+  }
+}
+
+export interface EventPage {
+  events: WorkflowEvent[];
+  /** Byte offset to pass as `after` for the next page. */
+  cursor: number;
+  /** Current size of the log; `cursor === size` means the caller is caught up. */
+  size: number;
+  hasMore: boolean;
+}
+
+/**
+ * Forward pagination from a byte cursor. `after: 0` starts at the beginning;
+ * the returned cursor is where the next page begins.
+ */
+export function readEventPage(
+  paths: RuntimePaths,
+  runId: string,
+  opts: { after?: number; limit?: number } = {},
+): EventPage {
+  const file = paths.eventsFile(runId);
+  const limit = Math.max(1, Math.min(opts.limit ?? 100, 1000));
+  if (!existsSync(file)) return { events: [], cursor: 0, size: 0, hasMore: false };
+  const size = statSync(file).size;
+  let cursor = Math.max(0, Math.min(opts.after ?? 0, size));
+  const lines: string[] = [];
+  let carry = '';
+
+  while (lines.length < limit && cursor < size) {
+    const end = Math.min(cursor + TAIL_CHUNK, size);
+    const text = carry + readWindow(file, cursor, end);
+    const consumedFrom = cursor - carry.length;
+    const parts = text.split('\n');
+    // The last part is either a partial line or an empty string after the final
+    // newline; either way it belongs to the next read.
+    carry = parts.pop() ?? '';
+    let offset = consumedFrom;
+    for (const part of parts) {
+      offset += Buffer.byteLength(part, 'utf8') + 1;
+      if (!part) continue;
+      lines.push(part);
+      if (lines.length >= limit) {
+        return {
+          events: parseEventLines(lines),
+          cursor: offset,
+          size,
+          hasMore: offset < size,
+        };
+      }
+    }
+    cursor = end;
+  }
+
+  return {
+    events: parseEventLines(lines),
+    // A trailing partial line is not consumed: the next call re-reads it whole.
+    cursor: size - Buffer.byteLength(carry, 'utf8'),
+    size,
+    hasMore: false,
+  };
 }
 
 export function readCurrentRunId(paths: RuntimePaths): string | undefined {

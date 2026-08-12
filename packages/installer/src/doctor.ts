@@ -169,6 +169,7 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
         'recommended-solution.md',
         'implementation-plan.md',
         'test-strategy.md',
+        'spec-map.md',
       ];
       const missingAnalysisTemplates = analysisTemplates.filter(
         (name) => !existsSync(join(runtimeDir, 'templates', name)),
@@ -178,7 +179,7 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
         missingAnalysisTemplates.length ? 'warn' : 'ok',
         missingAnalysisTemplates.length
           ? `missing: ${missingAnalysisTemplates.join(', ')} — run claude-workflow-kit update; existing templates will be preserved`
-          : 'six-file solution-analysis contract available',
+          : 'seven-file solution-analysis contract available',
       );
 
       const missingAgents = preset.agents.filter(

@@ -1,47 +1,37 @@
 import { create } from 'zustand';
-import { nextSelectedRunId } from './graphModel';
-import type { RunDetail, Snapshot } from './types';
+import type { Snapshot } from './types';
 
 interface MonitorState {
   snapshot: Snapshot | null;
-  detail: RunDetail | null;
-  selectedRunId: string | null;
+  /** Phase selected in the diagram, scoped to the run being viewed. */
   selectedNodeId: string | null;
+  /** Which panel the context column shows. */
+  sideTab: 'board' | 'phase' | 'context';
   connection: 'connecting' | 'live' | 'offline';
   /** Ticks once per second so "5s ago" and STALE stay honest without a push. */
   now: number;
   error: string | null;
   setSnapshot: (snapshot: Snapshot) => void;
-  setDetail: (detail: RunDetail | null) => void;
-  selectRun: (runId: string | null) => void;
   selectNode: (nodeId: string | null) => void;
+  setSideTab: (tab: MonitorState['sideTab']) => void;
   setConnection: (connection: MonitorState['connection']) => void;
   setError: (error: string | null) => void;
   tick: () => void;
 }
 
-export const useMonitor = create<MonitorState>((set, get) => ({
+export const useMonitor = create<MonitorState>((set) => ({
   snapshot: null,
-  detail: null,
-  selectedRunId: null,
   selectedNodeId: null,
+  sideTab: 'board',
   connection: 'connecting',
   now: Date.now(),
   error: null,
 
-  setSnapshot: (snapshot) => {
-    const nextSelected = nextSelectedRunId(get().selectedRunId, snapshot.runs, snapshot.currentRunId);
-    set({ snapshot, selectedRunId: nextSelected, connection: 'live', error: null });
-  },
-
-  setDetail: (detail) => set({ detail }),
-  selectRun: (runId) => set({ selectedRunId: runId, selectedNodeId: null, detail: null }),
-  selectNode: (nodeId) => set({ selectedNodeId: nodeId }),
+  setSnapshot: (snapshot) => set({ snapshot, connection: 'live', error: null }),
+  // Clicking a phase means "show me that phase"; the board is one click back.
+  selectNode: (nodeId) => set({ selectedNodeId: nodeId, sideTab: nodeId ? 'phase' : 'board' }),
+  setSideTab: (sideTab) => set({ sideTab }),
   setConnection: (connection) => set({ connection }),
   setError: (error) => set({ error }),
   tick: () => set({ now: Date.now() }),
 }));
-
-export function selectedRun(state: MonitorState) {
-  return state.snapshot?.runs.find((r) => r.runId === state.selectedRunId) ?? null;
-}

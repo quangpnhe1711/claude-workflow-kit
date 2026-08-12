@@ -9,20 +9,12 @@ interface Props {
   nodeId: string | null;
   nowMs: number;
   stallThresholdSeconds: number;
-  onClose: () => void;
 }
 
-export function NodeDetail({
-  workflow,
-  run,
-  detail,
-  nodeId,
-  nowMs,
-  stallThresholdSeconds,
-  onClose,
-}: Props) {
+/** The Phase tab: what one node of the diagram did, and what it left behind. */
+export function NodeDetail({ workflow, run, detail, nodeId, nowMs, stallThresholdSeconds }: Props) {
   const node = workflow.nodes.find((n) => n.id === nodeId);
-  if (!node) return null;
+  if (!node) return <div className="empty">Click a phase in the diagram to inspect it.</div>;
 
   const state = run.nodes[node.id];
   const status = nodeStatusView(run, node.id, nowMs, stallThresholdSeconds);
@@ -39,26 +31,21 @@ export function NodeDetail({
   const runningAgents = Object.values(run.agents).filter(
     (a) => a.status === 'RUNNING' && run.currentNode === node.id,
   );
+  const step = detail?.rollup?.steps[node.id];
 
   return (
-    <aside className="detail">
+    <div>
       <div className="detail__head">
         <div>
-          <div className="panel__title">{node.label}</div>
+          <div className="board__title">{node.label}</div>
           <div className="dim">{node.id}</div>
         </div>
-        <button type="button" className="detail__close" onClick={onClose} aria-label="Close">
-          ×
-        </button>
+        <span className={`pill pill--${status.toLowerCase()}`}>{status.replace('_', ' ')}</span>
       </div>
 
       {node.description && <p className="detail__desc">{node.description}</p>}
 
       <dl className="detail__grid">
-        <dt>Status</dt>
-        <dd>
-          <span className={`pill pill--${status.toLowerCase()}`}>{status.replace('_', ' ')}</span>
-        </dd>
         <dt>Started</dt>
         <dd>{clock(state?.startedAt)}</dd>
         <dt>Finished</dt>
@@ -92,6 +79,49 @@ export function NodeDetail({
       </dl>
 
       {state?.error && <div className="detail__error">{state.error}</div>}
+
+      {step && (
+        <>
+          <div className="panel__subtitle">This phase did</div>
+          <ul className="board__metrics">
+            <li>
+              <span>tool calls</span>
+              <span>{step.toolCalls}</span>
+            </li>
+            <li>
+              <span>files changed</span>
+              <span>{step.filesChanged}</span>
+            </li>
+            <li>
+              <span>files read</span>
+              <span>{step.filesRead}</span>
+            </li>
+            <li>
+              <span>commands</span>
+              <span>{step.commands}</span>
+            </li>
+            <li>
+              <span>test runs</span>
+              <span>{step.tests}</span>
+            </li>
+            <li title="No token source is wired up in this build.">
+              <span>tokens</span>
+              <span className="dim">N/A</span>
+            </li>
+          </ul>
+
+          {step.paths.length > 0 && (
+            <>
+              <div className="panel__subtitle">Files touched</div>
+              <ul className="detail__list mono">
+                {step.paths.map((path) => (
+                  <li key={path}>{path}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </>
+      )}
 
       {run.currentNode === node.id && run.derivedSemantic === 'SEMANTIC_LAG' && (
         <div className="detail__warn warn">
@@ -147,6 +177,6 @@ export function NodeDetail({
           ))}
         </ul>
       </section>
-    </aside>
+    </div>
   );
 }

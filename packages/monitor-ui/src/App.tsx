@@ -1,29 +1,17 @@
 import { useEffect } from 'react';
-import { fetchRunDetail, fetchSnapshot, subscribe } from './api';
-import { WorkflowGraph } from './graph/WorkflowGraph';
-import { Header } from './panels/Header';
-import { MissionBoard } from './panels/MissionBoard';
-import { NodeDetail } from './panels/NodeDetail';
-import { RunList } from './panels/RunList';
+import { fetchSnapshot, subscribe } from './api';
+import { nextSelectedRunId } from './graphModel';
+import { href, navigate, useRoute } from './router';
+import { Dashboard } from './screens/Dashboard';
+import { RunDetail } from './screens/RunDetail';
+import { RunExplorer } from './screens/RunExplorer';
+import { Skills } from './screens/Skills';
+import { LiveRail } from './panels/LiveRail';
 import { useMonitor } from './store';
 
 export default function App() {
-  const {
-    snapshot,
-    detail,
-    selectedRunId,
-    selectedNodeId,
-    connection,
-    now,
-    error,
-    setSnapshot,
-    setDetail,
-    selectRun,
-    selectNode,
-    setConnection,
-    setError,
-    tick,
-  } = useMonitor();
+  const { snapshot, connection, now, error, setSnapshot, setConnection, setError, tick } = useMonitor();
+  const route = useRoute();
 
   // Live updates: SSE for state, a local 1s tick so "5s ago" and STALE move
   // even when the server has nothing new to send.
@@ -41,80 +29,91 @@ export default function App() {
     };
   }, [setSnapshot, setConnection, setError, tick]);
 
-  const run = snapshot?.runs.find((r) => r.runId === selectedRunId) ?? null;
-
-  // Refetch the heavy per-run payload (events, artifacts) only when it changed.
+  // An empty hash lands on the run the user is most likely to want: the one
+  // Claude is working in right now.
   useEffect(() => {
-    if (!run) return;
-    if (detail?.run.runId === run.runId && detail.run.updatedAt === run.updatedAt) return;
-    let cancelled = false;
-    fetchRunDetail(run.runId)
-      .then((next) => {
-        if (!cancelled) setDetail(next);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [run?.runId, run?.updatedAt, detail?.run.runId, detail?.run.updatedAt, setDetail, run]);
+    if (route.name !== 'dashboard' || window.location.hash) return;
+    if (!snapshot) return;
+    const target = nextSelectedRunId(null, snapshot.runs, snapshot.currentRunId);
+    if (target) navigate({ name: 'run', runId: target });
+  }, [route.name, snapshot]);
 
   if (!snapshot) {
     return (
       <div className="boot">
+        <div className="boot__pulse" />
         <div>Connecting to the monitor server…</div>
         {error && <div className="boot__error">{error}</div>}
       </div>
     );
   }
 
-  const workflow = run ? snapshot.workflows.find((w) => w.id === run.workflow) : undefined;
+  const waiting = snapshot.runs.reduce((sum, run) => sum + (run.missionSummary?.pendingCheckpoints ?? 0), 0);
+  const active = snapshot.runs.filter((run) => run.derivedStatus === 'RUNNING').length;
+  const withRail = route.name === 'run' || route.name === 'runs';
+
+  const tab = (name: 'dashboard' | 'runs' | 'skills', label: string, badge?: number) => (
+    <a
+      className={`nav__tab${route.name === name || (name === 'runs' && route.name === 'run') ? ' is-active' : ''}`}
+      href={href(name === 'runs' ? { name: 'runs' } : name === 'skills' ? { name: 'skills' } : { name: 'dashboard' })}
+    >
+      {label}
+      {badge ? <span className="chip chip--count">{badge}</span> : null}
+    </a>
+  );
 
   return (
     <div className="app">
-      <Header snapshot={snapshot} run={run} connection={connection} nowMs={now} />
+      <nav className="nav">
+        <a className="nav__brand" href={href({ name: 'dashboard' })}>
+          <span className="nav__mark" />
+          Workflow Kit
+        </a>
+        <div className="nav__tabs">
+          {tab('dashboard', 'Dashboard')}
+          {tab('runs', 'Runs', waiting)}
+          {tab('skills', 'Skills')}
+        </div>
+        <div className="nav__right">
+          {active > 0 && (
+            <span className="header__stat" title="Runs currently executing">
+              <span className="dot claude-active" />
+              {active} active
+            </span>
+          )}
+          {snapshot.policyHealth && snapshot.policyHealth.status !== 'OK' && (
+            <span
+              className={`pill pill--policy_${snapshot.policyHealth.status.toLowerCase()}`}
+              title={
+                snapshot.policyHealth.status === 'DEGRADED'
+                  ? `The PreToolUse gate policy failed and is failing open: ${snapshot.policyHealth.lastError ?? ''}`
+                  : 'Gate enforcement is switched off in config.json (enforceGates=false).'
+              }
+            >
+              policy {snapshot.policyHealth.status.toLowerCase()}
+            </span>
+          )}
+          <span className={`conn conn--${connection}`} title={`Monitor stream: ${connection}`}>
+            <span className={`dot ${connection === 'live' ? 'claude-active' : 'claude-idle'}`} />
+            {connection}
+          </span>
+        </div>
+      </nav>
 
-      <div className="app__body">
-        <RunList snapshot={snapshot} selectedRunId={selectedRunId} onSelect={selectRun} nowMs={now} />
+      <div className={`app__body${withRail ? ' app__body--rail' : ''}`}>
+        {withRail && <LiveRail snapshot={snapshot} nowMs={now} activeRunId={route.name === 'run' ? route.runId : null} />}
 
-        <main className="canvas">
-          {run && workflow ? (
-            <WorkflowGraph
-              workflow={workflow}
-              run={run}
-              nowMs={now}
-              stallThresholdSeconds={snapshot.stallThresholdSeconds}
-              selectedNodeId={selectedNodeId}
-              onSelectNode={selectNode}
-            />
+        <main className="screen">
+          {route.name === 'run' ? (
+            <RunDetail runId={route.runId} snapshot={snapshot} nowMs={now} />
+          ) : route.name === 'runs' ? (
+            <RunExplorer snapshot={snapshot} nowMs={now} />
+          ) : route.name === 'skills' ? (
+            <Skills snapshot={snapshot} />
           ) : (
-            <div className="empty empty--canvas">
-              {snapshot.runs.length
-                ? 'Select a run.'
-                : `No runs in ${snapshot.runtimeDir}. Start one with /work (or choose /quick-fix, /feature-change, /bug-fix).`}
-            </div>
+            <Dashboard snapshot={snapshot} nowMs={now} />
           )}
         </main>
-
-        {/* One right-hand column: a selected phase wins, otherwise the board.
-            The board is the default view for a classified mission — it is where
-            the user answers a checkpoint. */}
-        {run && workflow && selectedNodeId ? (
-          <NodeDetail
-            workflow={workflow}
-            run={run}
-            detail={detail}
-            nodeId={selectedNodeId}
-            nowMs={now}
-            stallThresholdSeconds={snapshot.stallThresholdSeconds}
-            onClose={() => selectNode(null)}
-          />
-        ) : (
-          run &&
-          detail?.board &&
-          detail.run.runId === run.runId && (
-            <MissionBoard run={run} board={detail.board} onApplied={setDetail} />
-          )
-        )}
       </div>
     </div>
   );

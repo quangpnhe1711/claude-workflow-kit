@@ -86,12 +86,20 @@ export function allowedArtifactNames(def: WorkflowDefinition, run: RunState): st
 
 // ---- tool classification ---------------------------------------------------
 
-export function isCommandTool(toolName: string | undefined, config: PolicyConfig): boolean {
+// Narrowed on purpose: telemetry classifies tools too, and it has no business
+// holding the gate-enforcement half of the policy config.
+export function isCommandTool(
+  toolName: string | undefined,
+  config: Pick<PolicyConfig, 'commandTools'>,
+): boolean {
   if (!toolName) return false;
   return config.commandTools.some((t) => t.toLowerCase() === toolName.toLowerCase());
 }
 
-export function isFileWriteTool(toolName: string | undefined, config: PolicyConfig): boolean {
+export function isFileWriteTool(
+  toolName: string | undefined,
+  config: Pick<PolicyConfig, 'mutationTools' | 'mutationToolPatterns'>,
+): boolean {
   if (!toolName) return false;
   if (config.mutationTools.some((t) => t.toLowerCase() === toolName.toLowerCase())) return true;
   return config.mutationToolPatterns.some((p) => {
@@ -186,14 +194,14 @@ export function commandSegments(command: string): string[] {
 }
 
 /** argv of one segment, quotes stripped, env-var prefixes dropped. */
-function argvOf(segment: string): string[] {
+export function argvOf(segment: string): string[] {
   const parts = segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
   const argv = parts.map((p) => p.replace(/^["']|["']$/g, ''));
   while (argv.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[0]!)) argv.shift();
   return argv;
 }
 
-function programName(arg: string): string {
+export function programName(arg: string): string {
   const bare = arg.replace(/\\/g, '/').split('/').pop() ?? arg;
   return bare.replace(/\.(exe|cmd|bat|ps1)$/i, '');
 }

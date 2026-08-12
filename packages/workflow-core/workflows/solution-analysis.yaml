@@ -1,10 +1,12 @@
 id: solution-analysis
 label: Solution Analysis
 description: >-
-  Analysis-only workflow. Parse free-form requirements, reconcile business
-  behavior with the current source, measure impact, compare solutions, produce
-  the six-file handoff contract, and stop for explicit approval. This workflow
-  never mutates product source and never starts feature-change automatically.
+  Analysis-only workflow. Parse free-form requirements or a delivered detailed
+  design document, reconcile business behavior with the current source, measure
+  impact, compare solutions, produce the seven-file handoff contract including
+  the design-to-code traceability map, and stop for explicit approval. This
+  workflow never mutates product source and never starts feature-change
+  automatically.
 
 nodes:
   - id: prompt
@@ -29,9 +31,11 @@ nodes:
       - recommended-solution.md
       - implementation-plan.md
       - test-strategy.md
+      - spec-map.md
     description: >-
       Read-only source and convention analysis, impact discovery, solution
-      comparison, recommendation, implementation plan, and test strategy.
+      comparison, recommendation, implementation plan, test strategy, and the
+      numbered design-to-code traceability map.
 
   - id: approval
     label: Analysis Approval

@@ -1,9 +1,15 @@
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
-import { WorkflowRuntime } from '@claude-workflow-kit/workflow-core';
+import { WorkflowRuntime, type RunQuery } from '@claude-workflow-kit/workflow-core';
 import { ActionError, applyBoardAction, type ActionRequest } from './actions.js';
-import { buildRunDetail, buildSnapshot, snapshotSignature, type MonitorSnapshot } from './snapshot.js';
+import {
+  buildAnalytics,
+  buildRunDetail,
+  buildSnapshot,
+  snapshotSignature,
+  type MonitorSnapshot,
+} from './snapshot.js';
 
 export interface MonitorOptions {
   projectRoot?: string;
@@ -166,6 +172,53 @@ export function createMonitorServer(options: MonitorOptions = {}): MonitorHandle
 
       if (path === '/api/state') {
         sendJson(res, 200, buildSnapshot(runtime));
+        return;
+      }
+
+      // History. Answered from the derived index, so the cost is the page size
+      // and not the size of the archive.
+      if (path === '/api/runs') {
+        const status = url.searchParams.getAll('status').flatMap((v) => v.split(',')).filter(Boolean);
+        const query: RunQuery = {};
+        if (status.length) query.status = status;
+        for (const key of ['workflow', 'skill', 'q', 'since', 'until'] as const) {
+          const value = url.searchParams.get(key);
+          if (value) query[key] = value;
+        }
+        const sort = url.searchParams.get('sort');
+        if (sort === 'started' || sort === 'duration' || sort === 'updated') query.sort = sort;
+        if (url.searchParams.get('order') === 'asc') query.order = 'asc';
+        const offset = Number(url.searchParams.get('offset'));
+        if (Number.isFinite(offset) && offset > 0) query.offset = offset;
+        const limit = Number(url.searchParams.get('limit'));
+        if (Number.isFinite(limit) && limit > 0) query.limit = limit;
+        sendJson(res, 200, runtime.queryRuns(query));
+        return;
+      }
+
+      if (path === '/api/analytics') {
+        sendJson(res, 200, buildAnalytics(runtime));
+        return;
+      }
+
+      const eventsMatch = /^\/api\/runs\/([^/]+)\/events$/.exec(path);
+      if (eventsMatch) {
+        const runId = decodeURIComponent(eventsMatch[1]!);
+        const after = Number(url.searchParams.get('after'));
+        const limit = Number(url.searchParams.get('limit'));
+        sendJson(res, 200, {
+          runId,
+          ...runtime.eventPage(runId, {
+            ...(Number.isFinite(after) && after > 0 ? { after } : {}),
+            ...(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
+          }),
+        });
+        return;
+      }
+
+      const rollupMatch = /^\/api\/runs\/([^/]+)\/rollup$/.exec(path);
+      if (rollupMatch) {
+        sendJson(res, 200, runtime.rollup(decodeURIComponent(rollupMatch[1]!)));
         return;
       }
 
