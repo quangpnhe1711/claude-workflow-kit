@@ -8,6 +8,8 @@ import {
   missionHealthReport,
   missionProgress,
   pendingCheckpoints,
+  skillsDir,
+  type SkillDoc,
   type MissionBoardView,
   type PolicyHealth,
   type RunIndexEntry,
@@ -256,6 +258,77 @@ export interface Analytics {
   /** Usage stays unavailable until a real source is wired up. Never zero. */
   usage: { available: boolean; totalTokens: number | null; estimatedCost: number | null };
   generatedAt: string;
+}
+
+// ---- skills guide ----------------------------------------------------------
+
+export interface SkillUse {
+  workflow: string;
+  workflowLabel: string;
+  node: string;
+  nodeLabel: string;
+  gate?: string;
+}
+
+export interface SkillGuideEntry extends SkillDoc {
+  /** Where this skill runs inside the installed workflows. */
+  usedBy: SkillUse[];
+  runs: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  lastRunAt: string | null;
+}
+
+export interface SkillGuide {
+  /** Absolute path the skills were read from — the guide is what is installed. */
+  skillsDir: string;
+  skills: SkillGuideEntry[];
+}
+
+function skillUses(runtime: WorkflowRuntime): Map<string, SkillUse[]> {
+  const uses = new Map<string, SkillUse[]>();
+  for (const workflow of runtime.workflows().values()) {
+    for (const node of workflow.nodes) {
+      if (!node.skill) continue;
+      const use: SkillUse = {
+        workflow: workflow.id,
+        workflowLabel: workflow.label,
+        node: node.id,
+        nodeLabel: node.label,
+      };
+      if (node.gate) use.gate = node.gate;
+      uses.set(node.skill, [...(uses.get(node.skill) ?? []), use]);
+    }
+  }
+  return uses;
+}
+
+/**
+ * The guide the monitor shows: every installed skill, how it is invoked, where
+ * it runs, and how it has actually performed. Documentation read from the same
+ * files Claude Code reads, so it cannot drift from what is installed.
+ */
+export function buildSkillGuide(runtime: WorkflowRuntime, opts: { name?: string } = {}): SkillGuide {
+  const uses = skillUses(runtime);
+  const analytics = buildAnalytics(runtime);
+  const docs = opts.name
+    ? [runtime.skill(opts.name)].filter((doc): doc is SkillDoc => Boolean(doc))
+    : runtime.skills();
+
+  return {
+    skillsDir: skillsDir(runtime.paths.projectRoot),
+    skills: docs.map((doc) => {
+      const stat = analytics.skills.find((s) => s.skill === doc.name);
+      return {
+        ...doc,
+        usedBy: uses.get(doc.name) ?? [],
+        runs: stat?.runs ?? 0,
+        successRate: stat?.successRate ?? null,
+        averageDurationMs: stat?.averageDurationMs ?? null,
+        lastRunAt: stat?.lastRunAt ?? null,
+      };
+    }),
+  };
 }
 
 function median(values: number[]): number | null {

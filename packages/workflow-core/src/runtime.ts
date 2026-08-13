@@ -54,6 +54,7 @@ import {
 } from './run-index.js';
 import { observe, type Observation } from './telemetry.js';
 import { readRunUsage, type SessionUsage } from './usage.js';
+import { listSkills, readSkill, type SkillDoc } from './skills.js';
 import {
   DEFAULT_CONFIG,
   SOLUTION_ANALYSIS_ARTIFACTS,
@@ -532,6 +533,15 @@ export class WorkflowRuntime {
       },
       opts,
     ).entries;
+  }
+
+  /** Skills installed in this project, read from `.claude/skills`. */
+  skills(opts: { withBody?: boolean } = {}): SkillDoc[] {
+    return listSkills(this.paths.projectRoot, opts);
+  }
+
+  skill(name: string): SkillDoc | undefined {
+    return readSkill(this.paths.projectRoot, name);
   }
 
   runIndex(): RunIndexEntry[] {

@@ -307,6 +307,8 @@ a guessed phase would be a plausible lie, which is worse than a flagged gap.
 | `GET /api/runs/<runId>/events?after=<cursor>&limit=` | one page of the event log; `after: 0` starts at the beginning |
 | `GET /api/runs/<runId>/rollup` | folded counts for one run |
 | `GET /api/analytics` | totals, success rate, durations, per-workflow and per-skill statistics |
+| `GET /api/skills` | installed skills (no bodies): description, invocation, which phases run them, usage stats |
+| `GET /api/skills/<name>` | one skill with its full `SKILL.md` body — the guide screen's source |
 | `GET /api/runs/<runId>/artifacts/<name>` | raw artifact file |
 | `GET /api/stream` | SSE `snapshot` events |
 

@@ -1,4 +1,13 @@
-import type { Analytics, BoardAction, EventPage, RunDetail, RunPage, Snapshot } from './types';
+import type {
+  Analytics,
+  BoardAction,
+  EventPage,
+  RunDetail,
+  RunPage,
+  SkillGuide,
+  SkillGuideEntry,
+  Snapshot,
+} from './types';
 
 // Same-origin in production (the monitor server serves this bundle) and proxied
 // in dev by vite, so every path is relative.
@@ -47,6 +56,20 @@ export async function fetchEvents(runId: string, after = 0, limit = 200): Promis
   );
   if (!res.ok) throw new Error(`GET events -> ${res.status}`);
   return (await res.json()) as EventPage;
+}
+
+/** Installed skills without their bodies — the guide's list pane. */
+export async function fetchSkills(): Promise<SkillGuide> {
+  const res = await fetch('/api/skills');
+  if (!res.ok) throw new Error(`GET /api/skills -> ${res.status}`);
+  return (await res.json()) as SkillGuide;
+}
+
+/** One skill with its full SKILL.md body. */
+export async function fetchSkill(name: string): Promise<SkillGuideEntry> {
+  const res = await fetch(`/api/skills/${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error(`GET /api/skills/${name} -> ${res.status}`);
+  return (await res.json()) as SkillGuideEntry;
 }
 
 export async function fetchAnalytics(): Promise<Analytics> {

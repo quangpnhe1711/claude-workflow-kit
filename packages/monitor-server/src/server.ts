@@ -6,6 +6,7 @@ import { ActionError, applyBoardAction, type ActionRequest } from './actions.js'
 import {
   buildAnalytics,
   buildRunDetail,
+  buildSkillGuide,
   buildSnapshot,
   snapshotSignature,
   type MonitorSnapshot,
@@ -198,6 +199,26 @@ export function createMonitorServer(options: MonitorOptions = {}): MonitorHandle
 
       if (path === '/api/analytics') {
         sendJson(res, 200, buildAnalytics(runtime));
+        return;
+      }
+
+      // The guide: skills as installed, without their bodies. One skill's full
+      // text comes from /api/skills/<name>, so opening the screen does not ship
+      // every SKILL.md in the project.
+      if (path === '/api/skills') {
+        sendJson(res, 200, buildSkillGuide(runtime));
+        return;
+      }
+
+      const skillMatch = /^\/api\/skills\/([^/]+)$/.exec(path);
+      if (skillMatch) {
+        const name = decodeURIComponent(skillMatch[1]!);
+        const guide = buildSkillGuide(runtime, { name });
+        if (!guide.skills.length) {
+          sendJson(res, 404, { error: `no installed skill "${name}"` });
+          return;
+        }
+        sendJson(res, 200, guide.skills[0]);
         return;
       }
 

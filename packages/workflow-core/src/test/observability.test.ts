@@ -5,7 +5,7 @@
  * and that every derived artefact can be deleted and rebuilt identically.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -15,6 +15,7 @@ import { indexEntry, queryRuns, readRunIndex, type RunIndexEntry } from '../run-
 import { readEventPage, readEvents } from '../store.js';
 import { OUTSIDE_PROJECT, UNKNOWN_PROGRAM, observe, safePath, safePrograms } from '../telemetry.js';
 import { readSessionUsage } from '../usage.js';
+import { listSkills, parseSkill, readSkill } from '../skills.js';
 import { DEFAULT_CONFIG, type RunState, type WorkflowEvent } from '../types.js';
 
 function sandbox() {
@@ -356,6 +357,68 @@ test('repeated usage snapshots do not multiply the bill', () => {
     { ...snapshot(50), data: { sessionId: 's2', inputTokens: 50, outputTokens: 0, estimatedCost: 0.05 } },
   ]);
   assert.equal(twoSessions.usage.totalTokens, 450, 'different sessions add up');
+});
+
+// ---- installed skills (the guide's source) --------------------------------
+
+test('a skill is described by its own frontmatter, and entry skills are the typed ones', () => {
+  const entry = parseSkill(
+    'work',
+    '/p/.claude/skills/work/SKILL.md',
+    [
+      '---',
+      'name: work',
+      'description: Mission Control router. Classify and route.',
+      'disable-model-invocation: true',
+      'argument-hint: "[task + inputs]"',
+      'effort: medium',
+      '---',
+      '',
+      'Classify `$ARGUMENTS` first.',
+      '',
+      '## 1. Classify',
+      'text',
+      '## 2. Route',
+    ].join('\n'),
+  );
+  assert.equal(entry.name, 'work');
+  assert.equal(entry.entry, true, 'model invocation disabled means the user types it');
+  assert.equal(entry.argumentHint, '[task + inputs]');
+  assert.equal(entry.effort, 'medium');
+  assert.deepEqual(entry.outline, ['1. Classify', '2. Route']);
+  assert.ok(entry.body.startsWith('\nClassify'), 'the body excludes the frontmatter');
+
+  const step = parseSkill('wf-implement', '/p/x/SKILL.md', '---\nname: wf-implement\n---\nbody');
+  assert.equal(step.entry, false, 'a step skill is invoked by another skill, not by the user');
+});
+
+test('a skill with unreadable frontmatter is still listed', () => {
+  const doc = parseSkill('broken', '/p/x/SKILL.md', '---\nname: [unclosed\n---\nbody text');
+  assert.equal(doc.name, 'broken', 'the directory name is the fallback identity');
+  assert.equal(doc.description, undefined);
+  assert.equal(doc.body.trim(), 'body text');
+});
+
+test('listSkills reads the project\'s installed skills, and refuses path tricks', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cwk-skills-'));
+  try {
+    mkdirSync(join(dir, '.claude', 'skills', 'quick-fix'), { recursive: true });
+    writeFileSync(
+      join(dir, '.claude', 'skills', 'quick-fix', 'SKILL.md'),
+      '---\nname: quick-fix\ndescription: Fast path.\ndisable-model-invocation: true\n---\nBody.',
+      'utf8',
+    );
+    mkdirSync(join(dir, '.claude', 'skills', 'not-a-skill'), { recursive: true });
+
+    const skills = listSkills(dir);
+    assert.deepEqual(skills.map((s) => s.name), ['quick-fix'], 'a directory without SKILL.md is not a skill');
+    assert.equal(skills[0]!.body, '', 'the list omits bodies');
+    assert.equal(readSkill(dir, 'quick-fix')?.body.trim(), 'Body.');
+    assert.equal(readSkill(dir, '../../../etc/passwd'), undefined, 'a name from a URL cannot walk out');
+    assert.deepEqual(listSkills(join(dir, 'nowhere')), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
 });
 
 test('queries filter and page over the index', () => {

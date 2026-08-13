@@ -638,6 +638,24 @@ step('23. tool calls become redacted telemetry, folded and served over the API',
   const after = readFileSync(indexFile, 'utf8').split('\n').filter(Boolean).length;
   assert.equal(after, before, 'the index rebuilds identically from state.json');
 
+  // The guide is the installed SKILL.md files, not a written copy of them.
+  const guide = await getJson('http://127.0.0.1:4899/api/skills');
+  assert.ok(guide.skills.length > 10, `expected the preset's skills, got ${guide.skills.length}`);
+  assert.ok(
+    guide.skills.filter((s) => s.entry).some((s) => s.name === 'work'),
+    '/work is a skill the user types',
+  );
+  assert.ok(guide.skills.every((s) => s.body === ''), 'the list omits bodies');
+  const workSkill = await getJson('http://127.0.0.1:4899/api/skills/work');
+  assert.ok(workSkill.body.length > 200, 'the detail carries the real instructions');
+  assert.ok(workSkill.outline.length > 0);
+  const stepSkill = await getJson('http://127.0.0.1:4899/api/skills/wf-implement');
+  assert.equal(stepSkill.entry, false, 'a step skill is not typed by the user');
+  assert.ok(
+    stepSkill.usedBy.some((u) => u.workflow === 'feature-change'),
+    'the guide says which workflow phase runs it',
+  );
+
   // Usage has no source inside the sandbox, and says so instead of inventing one.
   const usageOut = cw('usage', 'sync', '--run', runId).stdout;
   assert.match(usageOut, /usage unavailable|tokens/);

@@ -8,6 +8,7 @@ export * from './telemetry.js';
 export * from './rollup.js';
 export * from './run-index.js';
 export * from './usage.js';
+export * from './skills.js';
 export * from './spec.js';
 export * from './conventions.js';
 export * from './runtime.js';

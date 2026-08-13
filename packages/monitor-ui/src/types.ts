@@ -110,6 +110,38 @@ export interface EventPage {
   hasMore: boolean;
 }
 
+export interface SkillUse {
+  workflow: string;
+  workflowLabel: string;
+  node: string;
+  nodeLabel: string;
+  gate?: string;
+}
+
+/** One installed skill, as read from its own SKILL.md. */
+export interface SkillGuideEntry {
+  name: string;
+  file: string;
+  description?: string;
+  argumentHint?: string;
+  effort?: string;
+  /** True when the user invokes it as `/name`; false for step skills. */
+  entry: boolean;
+  body: string;
+  outline: string[];
+  bytes: number;
+  usedBy: SkillUse[];
+  runs: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  lastRunAt: string | null;
+}
+
+export interface SkillGuide {
+  skillsDir: string;
+  skills: SkillGuideEntry[];
+}
+
 export interface WorkflowStat {
   workflow: string;
   runs: number;
