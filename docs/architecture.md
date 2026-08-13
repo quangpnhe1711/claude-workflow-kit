@@ -30,7 +30,7 @@ Phase 1 deliverable. Written before implementation.
 | Entry skill | `bug-fix` | Risk-adaptive defect entry; full 10-phase body only for L3. |
 | Step skill | `wf-quick-fix` | Gate-free L0-L1 fast path. |
 | Step skill | `wf-standard-change` | Gate-free L2 targeted-impact path. |
-| Step skill | `wf-solution-analysis` | Business/source/impact/solution analysis with a six-file contract. |
+| Step skill | `wf-solution-analysis` | Business/source/impact/solution analysis with a seven-file contract. |
 | Step skill | `wf-feature-from-analysis` | Trace-linked freshness check and feature continuation without repeated analysis. |
 | Entry skill | `refresh-conventions` | Bootstrap/refresh persisted conventions. |
 | Step skill | `wf-evidence-reconciliation` | Reconcile intent / TKCB / TKCT / BR / DB / code / tests. |
@@ -206,7 +206,7 @@ artifact validation still verifies presence/non-emptiness; semantic structure is
 owned by `wf-final-report` and focused installer tests.
 
 **D24 — Solution analysis is a separate approved, traceable run.**
-`solution-analysis` writes six mandatory artifacts and records relevant-source
+`solution-analysis` writes seven mandatory artifacts and records relevant-source
 SHA-256 hashes, then waits at `ANALYSIS_READY`. Explicit approval persists the
 chosen solution and scope. Handoff creates a `feature-change` with
 `sourceAnalysisRunId`; valid artifacts skip evidence/business/readiness, while a
@@ -274,6 +274,64 @@ user answers. Illegal jumps are refused, `--force` records the jump as forced, a
 a forced state that the topology contradicts is reported as drift instead of being
 resolved in either direction. A paused mission leaves only through `resume`, which
 restores the state it stood in rather than guessing a forward one.
+
+**D32 — A delivered design document becomes source of truth through a
+fingerprinted traceability map, and drift warns rather than blocks.**
+A detailed design document handed to the team is the input everything later is
+matched against, but it is still evidence: prose, revisable, sometimes wrong
+about the code. `spec-map.md` is the seventh analysis artifact — one row per
+verifiable requirement, each carrying a stable id, the design section it came
+from, and the code paths that implement it. `cw analysis ready` fingerprints
+every design document the map cites whether or not `--source` listed it, so
+forgetting one on the command line cannot make the analysis look fresh; the
+existing freshness machinery then reports a changed design document exactly as
+it reports changed source, and `BUSINESS_READY` reopens.
+
+The map is markdown with one table rather than JSON because the published copy
+under `docs/analysis/<run>/` is meant to be read and corrected by a human, and a
+reviewer will edit a table they can see. Structural problems are collected and
+reported together at `cw analysis ready`: a half-parsed map is worse than none.
+
+Entering implementation warns — unclaimed requirements, changed design sources,
+unreadable rows — but never refuses, and no write is denied for being outside a
+mapped path. The map is written by the same model whose work it describes, so
+enforcing it would mostly punish an honest map and reward an empty one. The hard
+gate stays where the evidence is independent: the source fingerprint.
+
+**D33 — Observability is a derived layer, and derived data is disposable.**
+`state.json` and `events.jsonl` stay the only sources of truth. The rollup
+(`runs/<id>/rollup.json`) and the history index (`index/runs.jsonl`) are folds of
+them: `cw index rebuild` regenerates the index, a missing rollup is refolded, and
+nothing in the state machine, the gate policy or run completion reads either. The
+alternative — letting the monitor's read model answer a correctness question —
+is how a dashboard becomes a second, disagreeing source of truth. The live
+snapshot therefore carries full state only for unfinished runs plus the most
+recent finished ones; history is answered from the index, and one run's events are
+paged by byte cursor rather than returned whole.
+
+**D34 — Telemetry is normalised before it is persisted, not filtered afterwards.**
+The `PreToolUse` hook already sees every tool payload, which is the only place
+file paths and commands exist. `telemetry.ts` converts that payload into a
+project-relative path or a single program name and drops everything else:
+arguments, file contents, stdin, environment, full command lines. The rule is
+inverted from a blocklist on purpose — an unknown tool records nothing rather
+than recording its arguments and hoping they are harmless. A path outside the
+project is counted as `<outside-project>` because a home directory carries a user
+name. A write is recorded on `PostToolUse`, so a call the gate denied is never
+reported as work that happened.
+
+**D35 — Token usage is joined from Claude Code's transcript, or it is N/A.**
+The kit never sees the model call, so usage cannot be measured from a hook.
+Claude Code writes `message.usage` and `message.model` per assistant message to
+`~/.claude/projects/<slug>/<sessionId>.jsonl`, and a run already records the
+session that owns it, so the join is exact and restricted to the run's own time
+window. Only numbers and a model id are copied; `message.content` is never read.
+When no transcript can be read the answer is *unavailable* — `available: false`
+with null values, rendered as `N/A` — never zero, because a zero reads as a
+measurement. Cost is derived only when `config.pricing` prices *every* model the
+run used; a partially priced run reports no cost rather than a number that looks
+complete. `USAGE_RECORDED` is a cumulative snapshot per session, not a delta, so
+running `cw usage sync` repeatedly cannot multiply the bill.
 
 **D25 — Installer ownership is hash-based and legacy-safe.**
 New manifests record hashes for framework-owned skills, agents, and hooks.

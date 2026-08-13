@@ -551,6 +551,98 @@ step('the SSE stream pushes a new run', async () => {
   await reader.cancel();
 });
 
+/**
+ * A cancelled SSE stream leaves a dead socket in undici's keep-alive pool, so
+ * the next request to the same origin can be reset once. That is a client-side
+ * artefact of this script, not a server behaviour — retry once and move on.
+ */
+async function getJson(url) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetch(url).then((r) => r.json());
+    } catch (error) {
+      if (attempt >= 2) throw error;
+      await new Promise((done) => setTimeout(done, 100));
+    }
+  }
+}
+
+step('23. tool calls become redacted telemetry, folded and served over the API', async () => {
+  // The bug-fix run opened by the SSE step is live, so the hook records against
+  // it. A terminal run records nothing, by design.
+  const runId = state().runId;
+  const secret = 'postgres://admin:hunter2@db.internal/prod';
+
+  const both = (payload) => {
+    hook({ hook_event_name: 'PreToolUse', session_id: 's1', ...payload });
+    hook({ hook_event_name: 'PostToolUse', session_id: 's1', ...payload });
+  };
+  both({ tool_name: 'Read', tool_input: { file_path: join(project, 'src', 'orders.js') } });
+  both({ tool_name: 'Write', tool_input: { file_path: 'src/orders.js', content: 'API_KEY=sk-live-nope' } });
+  both({ tool_name: 'Bash', tool_input: { command: 'npm test' } });
+  both({ tool_name: 'Bash', tool_input: { command: `psql "${secret}" -c "select 1"` } });
+
+  const log = readFileSync(join(project, '.ai-workflow', 'runs', runId, 'events.jsonl'), 'utf8');
+  const types = log
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line).type);
+  assert.ok(types.includes('FILE_READ'), 'a read is a fact worth keeping');
+  assert.ok(types.includes('FILE_CHANGED'), 'a write is recorded when it happened');
+  assert.ok(types.includes('TEST_STARTED') && types.includes('TEST_PASSED'), 'a test command is a test event');
+  // `psql` is denied by the open gate, so it never starts — and telemetry must
+  // not claim it did. The completion event comes from the PostToolUse call.
+  assert.ok(types.includes('COMMAND_COMPLETED'), 'commands that ran are recorded as commands');
+
+  // The redaction boundary: normalised facts only. Nothing else may reach disk.
+  assert.ok(!log.includes('hunter2'), 'a credential in a command argument must never be persisted');
+  assert.ok(!log.includes(secret), 'the full command line must never be persisted');
+  assert.ok(!log.includes('sk-live-nope'), 'file content must never be persisted');
+  assert.ok(log.includes('"executable":"psql"'), 'the program name is what is kept');
+  assert.ok(log.includes('"path":"src/orders.js"'), 'paths are project-relative');
+
+  // Folded counts, from the CLI and over HTTP.
+  const rollup = JSON.parse(cw('rollup', '--run', runId, '--json').stdout);
+  assert.ok(rollup.files.read >= 1 && rollup.files.changed >= 1);
+  assert.ok(rollup.tests.commandsStarted >= 1);
+  assert.equal(rollup.tests.cases.available, false, 'test cases are not parsed, so they stay unavailable');
+  assert.equal(rollup.usage.available, false, 'no transcript in the sandbox means N/A, never 0');
+  assert.equal(rollup.usage.totalTokens, null);
+  assert.ok(rollup.steps[state().currentNode], 'work is attributed to the phase it happened in');
+
+  // History comes from the index, paged, without loading full run states.
+  const page = await getJson('http://127.0.0.1:4899/api/runs?limit=1');
+  assert.equal(page.runs.length, 1);
+  assert.ok(page.total >= 2, `expected both runs in the index, got ${page.total}`);
+  const filtered = await getJson('http://127.0.0.1:4899/api/runs?status=COMPLETED');
+  assert.ok(filtered.runs.every((r) => r.status === 'COMPLETED'));
+
+  const first = await getJson(`http://127.0.0.1:4899/api/runs/${runId}/events?after=0&limit=3`);
+  assert.equal(first.events.length, 3);
+  assert.ok(first.cursor > 0 && first.hasMore, 'a cursor walks forward through the log');
+  const second = await getJson(`http://127.0.0.1:4899/api/runs/${runId}/events?after=${first.cursor}&limit=3`);
+  assert.notDeepEqual(second.events[0], first.events[0], 'the next page is the next events');
+
+  const analytics = await getJson('http://127.0.0.1:4899/api/analytics');
+  assert.ok(analytics.totalRuns >= 2);
+  assert.equal(analytics.usage.available, false);
+  assert.equal(analytics.usage.totalTokens, null, 'unmeasured usage is null, never 0');
+  assert.ok(analytics.workflows.some((w) => w.workflow === 'feature-change'));
+
+  // Derived data is disposable: delete the index and rebuild it from the runs.
+  const indexFile = join(project, '.ai-workflow', 'index', 'runs.jsonl');
+  assert.ok(existsSync(indexFile));
+  const before = readFileSync(indexFile, 'utf8').split('\n').filter(Boolean).length;
+  rmSync(indexFile);
+  cw('index', 'rebuild');
+  const after = readFileSync(indexFile, 'utf8').split('\n').filter(Boolean).length;
+  assert.equal(after, before, 'the index rebuilds identically from state.json');
+
+  // Usage has no source inside the sandbox, and says so instead of inventing one.
+  const usageOut = cw('usage', 'sync', '--run', runId).stdout;
+  assert.match(usageOut, /usage unavailable|tokens/);
+});
+
 step('18. a time-only status change is pushed to the browser', async () => {
   // POSSIBLY_STALLED and SEMANTIC_LAG are functions of elapsed time: they flip
   // with no new event at all. If they are not in the change signature, the
@@ -1275,7 +1367,9 @@ for (const [name, fn] of steps) {
     process.stdout.write(`  ok  ${name}\n`);
   } catch (error) {
     failed = true;
-    process.stdout.write(`  FAIL ${name}\n       ${error.message}\n`);
+    // `fetch failed` on its own says nothing; the cause is where the reason is.
+    const cause = error.cause ? `\n       cause: ${error.cause.message ?? error.cause}` : '';
+    process.stdout.write(`  FAIL ${name}\n       ${error.message}${cause}\n${error.stack ?? ''}\n`);
     break;
   }
 }

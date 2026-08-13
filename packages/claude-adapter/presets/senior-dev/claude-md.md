@@ -29,17 +29,28 @@ classification, escalation, real decision, blocker, or material risk concisely.
 When the user asks for business analysis, impact measurement, solution options,
 or an implementation plan against the current source without coding, route to
 `solution-analysis`. Accept free-form input and parse goal, business behavior,
-scope, constraints, acceptance criteria, open questions, and assumptions.
+scope, constraints, acceptance criteria, open questions, and assumptions. A
+delivered detailed design document (TKCT, BRD, spec) is the same route: store it
+in the repository first so it can be fingerprinted, then analyse it.
 
 The workflow may read source and valid convention cache but never edits product
 code. It must produce `business-analysis.md`, `impact-analysis.md`,
-`solution-options.md`, `recommended-solution.md`, `implementation-plan.md`, and
-`test-strategy.md`, then stop at `ANALYSIS_READY`. Only explicit approval of the
-solution and scope may create a trace-linked `feature-change` run.
+`solution-options.md`, `recommended-solution.md`, `implementation-plan.md`,
+`test-strategy.md`, and `spec-map.md`, then stop at `ANALYSIS_READY`. Only
+explicit approval of the solution and scope may create a trace-linked
+`feature-change` run.
+
+`spec-map.md` is the design-to-code source of truth: one row per verifiable
+requirement, each with a stable `SPEC-nnn` id, the design section it came from,
+and the code paths implementing it. Every design document it cites is
+fingerprinted, so a later edit to the design reopens `BUSINESS_READY` the same
+way changed source does. Ask it what governs a file before editing:
+`cw spec check --files "a.ts,b.ts"`.
 
 A linked feature run checks relevant-source freshness before implementation.
 Reuse valid artifacts; do not repeat business/solution analysis. If material
-source changed, keep writes gated and refresh only the affected analysis.
+source changed, keep writes gated and refresh only the affected analysis. Keep
+`Code Paths` current when implementation moves or splits a file.
 
 ### Mission Control
 

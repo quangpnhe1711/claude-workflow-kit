@@ -1,4 +1,4 @@
-import type { BoardAction, RunDetail, Snapshot } from './types';
+import type { Analytics, BoardAction, EventPage, RunDetail, RunPage, Snapshot } from './types';
 
 // Same-origin in production (the monitor server serves this bundle) and proxied
 // in dev by vite, so every path is relative.
@@ -13,6 +13,46 @@ export async function fetchRunDetail(runId: string): Promise<RunDetail> {
   const res = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
   if (!res.ok) throw new Error(`GET /api/runs/${runId} -> ${res.status}`);
   return (await res.json()) as RunDetail;
+}
+
+export interface RunFilter {
+  status?: string[];
+  workflow?: string;
+  skill?: string;
+  q?: string;
+  sort?: 'started' | 'duration' | 'updated';
+  offset?: number;
+  limit?: number;
+}
+
+/** History, from the derived index. Never loads a full run state. */
+export async function fetchRuns(filter: RunFilter = {}): Promise<RunPage> {
+  const params = new URLSearchParams();
+  if (filter.status?.length) params.set('status', filter.status.join(','));
+  if (filter.workflow) params.set('workflow', filter.workflow);
+  if (filter.skill) params.set('skill', filter.skill);
+  if (filter.q) params.set('q', filter.q);
+  if (filter.sort) params.set('sort', filter.sort);
+  if (filter.offset) params.set('offset', String(filter.offset));
+  if (filter.limit) params.set('limit', String(filter.limit));
+  const res = await fetch(`/api/runs?${params.toString()}`);
+  if (!res.ok) throw new Error(`GET /api/runs -> ${res.status}`);
+  return (await res.json()) as RunPage;
+}
+
+/** One page of the event log, from a byte cursor. `after: 0` is the beginning. */
+export async function fetchEvents(runId: string, after = 0, limit = 200): Promise<EventPage> {
+  const res = await fetch(
+    `/api/runs/${encodeURIComponent(runId)}/events?after=${after}&limit=${limit}`,
+  );
+  if (!res.ok) throw new Error(`GET events -> ${res.status}`);
+  return (await res.json()) as EventPage;
+}
+
+export async function fetchAnalytics(): Promise<Analytics> {
+  const res = await fetch('/api/analytics');
+  if (!res.ok) throw new Error(`GET /api/analytics -> ${res.status}`);
+  return (await res.json()) as Analytics;
 }
 
 /**

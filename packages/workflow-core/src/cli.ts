@@ -33,6 +33,7 @@ import {
   type TaskType,
   type WorkflowClass,
 } from './mission.js';
+import { SPEC_MAP_ARTIFACT } from './spec.js';
 import type { EventType, RunState } from './types.js';
 
 export interface ParsedArgs {
@@ -81,13 +82,18 @@ Workflow commands (emitted by workflow skills; the CLI owns all state):
   cw run list [--json]
   cw run show [--run <id>] [--json]
 
-  cw analysis ready --source "path[,path...]" [--run <analysisId>]
-      validate the six artifacts, snapshot relevant source, stop at ANALYSIS_READY
+  cw analysis ready [--source "path[,path...]"] [--run <analysisId>]
+      validate the seven artifacts, snapshot relevant source plus every design
+      document cited by spec-map.md, stop at ANALYSIS_READY
   cw analysis approve --solution "..." --scope "..." [--run <analysisId>]
   cw analysis handoff [--run <analysisId>] [--label "..."]
       create a trace-linked feature-change run; never happens automatically
   cw analysis freshness [--run <featureId>]
   cw analysis refresh --source "path[,path...]" --reason "..." [--run <featureId>]
+
+  cw spec check [--files "a,b"] [--run <id>] [--json]
+      which design requirements govern those files, plus unclaimed requirements
+      and design documents that changed since approval (advisory, never blocks)
 
   cw phase enter <node> [--run <id>] [--force]
   cw phase complete [node] [--run <id>]
@@ -621,6 +627,35 @@ export async function runCli(argv: string[]): Promise<number> {
       throw new TransitionError(`unknown: cw analysis ${sub ?? '<ready|approve|handoff|freshness|refresh>'}`);
     }
 
+    case 'spec': {
+      const sub = positional[1];
+      if (sub !== 'check') throw new TransitionError(`unknown: cw spec ${sub ?? '<check>'}`);
+      const files = typeof flags['files'] === 'string'
+        ? flags['files'].split(',').map((f) => f.trim()).filter(Boolean)
+        : [];
+      const opts: { runId?: string; files?: string[] } = { files };
+      if (runFlag) opts.runId = runFlag;
+      const report = runtime.specCheck(opts);
+      if (json) {
+        process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        return report.errors.length ? 1 : 0;
+      }
+      if (!report.present) {
+        process.stdout.write(`no ${SPEC_MAP_ARTIFACT} in run ${report.runId}\n`);
+        return 0;
+      }
+      process.stdout.write(`${report.items.length} requirement(s) from ${report.designSources.join(', ')}\n`);
+      for (const entry of report.coverage) {
+        process.stdout.write(
+          `  ${entry.file}  ${entry.itemIds.length ? entry.itemIds.join(' ') : 'UNCOVERED — no design requirement claims this file'}\n`,
+        );
+      }
+      for (const warning of runtime.specWarnings(runtime.resolveRun(runFlag))) {
+        process.stderr.write(`cw: spec drift — ${warning}\n`);
+      }
+      return report.errors.length ? 1 : 0;
+    }
+
     case 'phase': {
       const sub = positional[1];
       const node = positional[2];
@@ -631,7 +666,13 @@ export async function runCli(argv: string[]): Promise<number> {
         };
         if (allowMissingArtifacts) opts.allowMissingArtifacts = true;
         if (reason) opts.reason = reason;
-        printRun(runtime.enterPhase(node, withRun(opts)), runtime, json);
+        const entered = runtime.enterPhase(node, withRun(opts));
+        printRun(entered, runtime, json);
+        if (runtime.isImplementationPhase(entered)) {
+          for (const warning of runtime.specWarnings(entered)) {
+            process.stderr.write(`cw: spec drift — ${warning}\n`);
+          }
+        }
         return 0;
       }
       if (sub === 'complete') {
@@ -1145,6 +1186,84 @@ export async function runCli(argv: string[]): Promise<number> {
     case 'board': {
       const board = runtime.missionBoard(runFlag);
       process.stdout.write(json ? `${JSON.stringify(board, null, 2)}\n` : `${formatMissionBoard(board)}\n`);
+      return 0;
+    }
+
+    // Derived observability data. Everything under `index` and `rollup` can be
+    // deleted at any time: these commands rebuild it from state.json + events.
+    case 'index': {
+      const sub = positional[1] ?? 'rebuild';
+      if (sub !== 'rebuild' && sub !== 'show') {
+        throw new TransitionError('usage: cw index rebuild | cw index show');
+      }
+      const entries = runtime.syncIndex(sub === 'rebuild' ? { force: true } : {});
+      if (json) {
+        process.stdout.write(`${JSON.stringify(entries, null, 2)}\n`);
+        return 0;
+      }
+      process.stdout.write(
+        sub === 'rebuild'
+          ? `run index rebuilt: ${entries.length} run(s)\n`
+          : `${entries
+              .slice(0, 40)
+              .map((e) => `${e.runId}  ${e.status.padEnd(13)} ${e.workflow}  ${e.label ?? ''}`)
+              .join('\n')}\n`,
+      );
+      return 0;
+    }
+
+    // Token usage cannot be measured from inside the kit; it is read out of
+    // Claude Code's own transcript for the session that owns the run. Runs sync
+    // automatically when they end; this is for a run still in progress.
+    case 'usage': {
+      const sub = positional[1] ?? 'sync';
+      if (sub !== 'sync' && sub !== 'show') throw new TransitionError('usage: cw usage sync | cw usage show');
+      const usage = sub === 'sync' ? runtime.syncUsage(withRun({})) : undefined;
+      const rollup = runtime.rollup(runFlag ?? runtime.currentRun()?.runId ?? '');
+      if (json) {
+        process.stdout.write(`${JSON.stringify(usage ?? rollup.usage, null, 2)}\n`);
+        return 0;
+      }
+      if (sub === 'sync' && !usage) {
+        process.stdout.write(
+          'usage unavailable: no Claude Code transcript could be read for this run\n' +
+            '(the run has no owning session, or the session was recorded elsewhere)\n',
+        );
+        return 0;
+      }
+      const shown = usage ?? {
+        totalTokens: rollup.usage.totalTokens,
+        inputTokens: rollup.usage.inputTokens,
+        outputTokens: rollup.usage.outputTokens,
+        cacheReadTokens: rollup.usage.cacheReadTokens,
+        cacheWriteTokens: rollup.usage.cacheWriteTokens,
+        estimatedCost: rollup.usage.estimatedCost,
+        models: rollup.usage.models,
+      };
+      process.stdout.write(
+        `tokens ${shown.totalTokens ?? 'N/A'} (in ${shown.inputTokens ?? 'N/A'}, out ${shown.outputTokens ?? 'N/A'}, ` +
+          `cache read ${shown.cacheReadTokens ?? 'N/A'}, cache write ${shown.cacheWriteTokens ?? 'N/A'})\n` +
+          `cost ${shown.estimatedCost === null || shown.estimatedCost === undefined ? 'N/A (no pricing configured)' : `$${shown.estimatedCost.toFixed(4)}`}\n` +
+          `models ${shown.models?.join(', ') || 'N/A'}\n`,
+      );
+      return 0;
+    }
+
+    case 'rollup': {
+      const target = runFlag ?? runtime.currentRun()?.runId;
+      if (!target) throw new TransitionError('no active run; usage: cw rollup --run <runId>');
+      const rollup = runtime.rollup(target);
+      if (json) {
+        process.stdout.write(`${JSON.stringify(rollup, null, 2)}\n`);
+        return 0;
+      }
+      const usage = rollup.usage.available ? `${rollup.usage.totalTokens} tokens` : 'tokens N/A';
+      process.stdout.write(
+        `${rollup.runId}  ${rollup.run.status}\n` +
+          `events ${rollup.eventCount}  tools ${rollup.tools.calls}  ` +
+          `files ${rollup.files.changed} changed / ${rollup.files.read} read  ` +
+          `commands ${rollup.commands.started}  tests ${rollup.tests.commandsStarted}  ${usage}\n`,
+      );
       return 0;
     }
 

@@ -7,9 +7,20 @@ import * as mc from './mission.js';
 import { inspectConventions, type ConventionReport } from './conventions.js';
 import { evaluateMutation, missingGates, type RunGateContext as PolicyRunContext } from './policy.js';
 import {
+  SPEC_MAP_ARTIFACT,
+  designSources,
+  parseSpecMap,
+  specCoverage,
+  unmappedItems,
+  type SpecCoverage,
+  type SpecItem,
+  type SpecMap,
+} from './spec.js';
+import {
   RunStateCorruptError,
   RuntimePaths,
   appendEvent,
+  eventsSize,
   findProjectRoot,
   isQuarantined,
   listRunIds,
@@ -17,6 +28,7 @@ import {
   quarantineRun,
   readConfig,
   readCurrentRunId,
+  readEventPage,
   readEvents,
   readPolicyHealth,
   readRun,
@@ -26,9 +38,22 @@ import {
   scanArtifacts,
   tryReadRun,
   writeCurrentRunId,
+  writeJsonAtomic,
   writeRun,
   writeSessions,
+  type EventPage,
 } from './store.js';
+import { foldRollup, type RunRollup } from './rollup.js';
+import {
+  queryRuns,
+  readRunIndex,
+  syncRunIndex,
+  type RunIndexEntry,
+  type RunPage,
+  type RunQuery,
+} from './run-index.js';
+import { observe, type Observation } from './telemetry.js';
+import { readRunUsage, type SessionUsage } from './usage.js';
 import {
   DEFAULT_CONFIG,
   SOLUTION_ANALYSIS_ARTIFACTS,
@@ -58,6 +83,19 @@ export interface RuntimeOptions {
   sessionId?: string;
 }
 
+export interface SpecCheckReport {
+  runId: string;
+  present: boolean;
+  errors: string[];
+  items: SpecItem[];
+  designSources: string[];
+  /** Requirement ids with no code path yet. */
+  unmapped: string[];
+  /** Design documents whose content no longer matches the approved fingerprint. */
+  staleDesignSources: string[];
+  coverage: SpecCoverage[];
+}
+
 const SEMANTIC_EVENTS = new Set<EventType>([
   'RUN_STARTED',
   'RUN_ROUTED',
@@ -67,6 +105,7 @@ const SEMANTIC_EVENTS = new Set<EventType>([
   'ANALYSIS_HANDOFF',
   'ANALYSIS_FRESHNESS',
   'ANALYSIS_REFRESHED',
+  'SPEC_DRIFT',
   'RUN_COMPLETED',
   'RUN_FAILED',
   'NODE_ENTER',
@@ -365,8 +404,182 @@ export class WorkflowRuntime {
     return readEvents(this.paths, runId, limit);
   }
 
+  /** Forward page of the event log from a byte cursor. See `readEventPage`. */
+  eventPage(runId: string, opts: { after?: number; limit?: number } = {}): EventPage {
+    return readEventPage(this.paths, runId, opts);
+  }
+
   artifacts(runId: string): string[] {
     return scanArtifacts(this.paths, runId).valid;
+  }
+
+  // ---- observability (derived; never a source of truth) --------------------
+
+  /**
+   * Per-run rollup. Cached in `rollup.json` keyed by the size of the event log:
+   * appending is the only way the log changes, so a matching size means the
+   * cached fold is still exact. Deleting the file only costs one re-fold.
+   */
+  rollup(runId: string): RunRollup {
+    const run = this.run(runId);
+    const bytes = eventsSize(this.paths, runId);
+    const file = this.paths.rollupFile(runId);
+    if (existsSync(file)) {
+      try {
+        const cached = JSON.parse(readFileSync(file, 'utf8')) as RunRollup;
+        if (cached.eventBytes === bytes && cached.run.status === run.status) return cached;
+      } catch {
+        // A damaged cache is a cache miss, never an error.
+      }
+    }
+    const rollup = foldRollup(run, readEvents(this.paths, runId), {
+      eventBytes: bytes,
+      now: this.now(),
+    });
+    // Only a finished run gets a frozen copy: a live run's log grows every few
+    // seconds, and rewriting the cache each time costs more than folding it.
+    if (isTerminalRun(run.status)) {
+      try {
+        writeJsonAtomic(file, rollup);
+      } catch {
+        // The cache is optional; the fold above is the answer.
+      }
+    }
+    return rollup;
+  }
+
+  /**
+   * Read this run's token usage out of Claude Code's session transcript and
+   * record it as a cumulative `USAGE_RECORDED` snapshot.
+   *
+   * The kit cannot measure tokens itself — it never sees the model call — so
+   * this is a join on the session that owns the run, restricted to the run's own
+   * time window. Repeated calls are safe: the fold keeps the newest snapshot per
+   * session rather than adding them up.
+   *
+   * Returns undefined when no transcript can be read, which is a real answer:
+   * the UI shows N/A rather than a zero that looks measured.
+   */
+  syncUsage(opts: { runId?: string; run?: RunState } = {}): SessionUsage | undefined {
+    const run = opts.run ?? this.resolveRun(opts.runId);
+    const sessionId = run.ownerSessionId;
+    if (!sessionId) return undefined;
+    const usage = readRunUsage(
+      this.paths.projectRoot,
+      sessionId,
+      { from: run.startedAt, ...(run.finishedAt ? { to: run.finishedAt } : {}) },
+      this.config.pricing,
+    );
+    if (!usage) return undefined;
+    this.record(run, 'USAGE_RECORDED', {
+      sessionId,
+      data: {
+        sessionId,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheReadTokens: usage.cacheReadTokens,
+        cacheWriteTokens: usage.cacheWriteTokens,
+        totalTokens: usage.totalTokens,
+        estimatedCost: usage.estimatedCost,
+        models: usage.models,
+        messages: usage.messages,
+        ...(usage.through ? { through: usage.through } : {}),
+        source: 'claude-code-transcript',
+      },
+    });
+    return usage;
+  }
+
+  /** Usage sync at the end of a run. Never allowed to fail the run itself. */
+  private syncUsageQuietly(run: RunState): void {
+    try {
+      this.syncUsage({ run });
+    } catch {
+      // Telemetry is best-effort; a missing transcript is not a run failure.
+    }
+  }
+
+  /** Refresh the derived history index. Cheap: one `stat` per unchanged run. */
+  syncIndex(opts: { force?: boolean } = {}): RunIndexEntry[] {
+    return syncRunIndex(
+      this.paths,
+      {
+        runIds: () => this.runIds(),
+        readRun: (runId) => {
+          try {
+            return this.run(runId);
+          } catch {
+            return undefined;
+          }
+        },
+        definition: (workflowId) => {
+          try {
+            return this.workflow(workflowId);
+          } catch {
+            return undefined;
+          }
+        },
+        // Counts come from the frozen rollup of a finished run only; folding a
+        // live run's log on every index sync would undo the point of the index.
+        rollup: (run) => {
+          if (!isTerminalRun(run.status)) return undefined;
+          try {
+            return this.rollup(run.runId);
+          } catch {
+            return undefined;
+          }
+        },
+      },
+      opts,
+    ).entries;
+  }
+
+  runIndex(): RunIndexEntry[] {
+    return readRunIndex(this.paths);
+  }
+
+  /** Paged history query. Reads the index, never the runs themselves. */
+  queryRuns(query: RunQuery = {}): RunPage {
+    return queryRuns(this.syncIndex(), query);
+  }
+
+  /**
+   * Record redacted telemetry about a tool call: which project file it touched,
+   * which program it ran. Never the arguments, never the contents.
+   *
+   * This is observability, not semantics — it can never move a phase, open a
+   * gate or change a status, which is what keeps D1 intact.
+   */
+  recordObservations(
+    runId: string,
+    input: { phase: 'start' | 'end' | 'fail'; toolName?: string; toolInput?: Record<string, unknown> },
+  ): Observation[] {
+    const observations = observe({
+      phase: input.phase,
+      toolName: input.toolName,
+      toolInput: input.toolInput,
+      projectRoot: this.paths.projectRoot,
+      config: this.config,
+    });
+    if (!observations.length) return [];
+    let node: string | undefined;
+    try {
+      node = this.run(runId).currentNode;
+    } catch {
+      node = undefined;
+    }
+    for (const observation of observations) {
+      const event: WorkflowEvent = {
+        ts: this.now(),
+        type: observation.type,
+        runId,
+        data: observation.data,
+        ...(node ? { node } : {}),
+        ...(input.toolName ? { tool: input.toolName } : {}),
+      };
+      appendEvent(this.paths, event);
+    }
+    return observations;
   }
 
   private record(run: RunState, type: EventType, extra: Partial<WorkflowEvent> = {}): WorkflowEvent {
@@ -443,6 +656,90 @@ export class WorkflowRuntime {
     return stale;
   }
 
+  private readSpecMap(runId: string): SpecMap | undefined {
+    const path = join(this.paths.runDir(runId), SPEC_MAP_ARTIFACT);
+    if (!existsSync(path)) return undefined;
+    return parseSpecMap(readFileSync(path, 'utf8'));
+  }
+
+  /**
+   * Design documents the map cites, kept in every snapshot whether or not the
+   * caller listed them: they are the authority the whole analysis rests on, so
+   * forgetting one on the command line must not make the analysis look fresh.
+   */
+  private citedDesignSources(runId: string): string[] {
+    return designSources(this.readSpecMap(runId)?.items ?? []).filter((path) =>
+      existsSync(resolve(this.paths.projectRoot, path)),
+    );
+  }
+
+  /**
+   * The fingerprint the traceability map is judged against. A handed-off feature
+   * run has no snapshot of its own until it refreshes, so the approved analysis
+   * run stays the baseline — the same order `checkAnalysisFreshness` uses.
+   */
+  private specSnapshot(run: RunState): SourceSnapshotEntry[] {
+    if (run.analysisHandoff?.sourceSnapshot) return run.analysisHandoff.sourceSnapshot;
+    if (run.analysis?.sourceSnapshot) return run.analysis.sourceSnapshot;
+    if (!run.sourceAnalysisRunId) return [];
+    try {
+      return this.run(run.sourceAnalysisRunId).analysis?.sourceSnapshot ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  private specReport(run: RunState, files: string[]): SpecCheckReport {
+    const map = this.readSpecMap(run.runId);
+    const items = map?.items ?? [];
+    const design = designSources(items);
+    const snapshot = this.specSnapshot(run).filter((entry) => design.includes(entry.path));
+    return {
+      runId: run.runId,
+      present: map !== undefined,
+      errors: map?.errors ?? [],
+      items,
+      designSources: design,
+      unmapped: unmappedItems(items).map((item) => item.id),
+      staleDesignSources: this.staleSnapshotPaths(snapshot),
+      coverage: specCoverage(items, files),
+    };
+  }
+
+  /** Is the run parked on the phase that changes the repository? */
+  isImplementationPhase(run: RunState): boolean {
+    return mc.isImplementationNode(this.workflow(run.workflow), run.currentNode);
+  }
+
+  /** Which requirements govern the given files, and where the map has drifted. */
+  specCheck(opts: { runId?: string; files?: string[] } = {}): SpecCheckReport {
+    return this.specReport(this.resolveRun(opts.runId), opts.files ?? []);
+  }
+
+  /**
+   * Advisory only, by design. A design document that moved on, or a requirement
+   * nobody has claimed a file for, is a fact the implementer must see — but it
+   * is not a reason to refuse the phase, because the map is written by the same
+   * model whose work it describes.
+   */
+  specWarnings(run: RunState): string[] {
+    const designDriven = run.workflow === 'solution-analysis' || run.sourceAnalysisRunId !== undefined;
+    const report = this.specReport(run, []);
+    if (!report.present) {
+      return designDriven
+        ? [`${SPEC_MAP_ARTIFACT} is missing; this run cannot be traced back to a design document`]
+        : [];
+    }
+    const warnings = report.errors.map((error) => `unreadable traceability row — ${error}`);
+    for (const id of report.unmapped) {
+      warnings.push(`${id} has no code path yet; the design requirement is unclaimed`);
+    }
+    for (const path of report.staleDesignSources) {
+      warnings.push(`design source ${path} changed since the map was approved; re-check the affected rows`);
+    }
+    return warnings;
+  }
+
   /**
    * Publish the validated analysis to a readable directory in the repository.
    * Run evidence under `runs/<runId>/` stays canonical and machine-owned; this
@@ -478,7 +775,7 @@ export class WorkflowRuntime {
   }
 
   /**
-   * Validate the six-file contract, capture the relevant-source fingerprint and
+   * Validate the seven-file contract, capture the relevant-source fingerprint and
    * park the run for explicit approval. No repository source is mutated.
    */
   markAnalysisReady(opts: { runId?: string; sources: string[] }): RunState {
@@ -498,8 +795,18 @@ export class WorkflowRuntime {
       );
     }
 
+    const map = this.readSpecMap(run.runId);
+    if (map?.errors.length) {
+      throw new sm.TransitionError(
+        `${SPEC_MAP_ARTIFACT} is not a usable traceability map:\n  - ${map.errors.join('\n  - ')}`,
+      );
+    }
+
     const now = this.now();
-    const sourceSnapshot = this.sourceSnapshot(opts.sources);
+    const sourceSnapshot = this.sourceSnapshot([
+      ...opts.sources,
+      ...this.citedDesignSources(run.runId),
+    ]);
     const reportDir = this.publishAnalysisReport(run);
     run.analysis = {
       status: 'ANALYSIS_READY',
@@ -737,7 +1044,10 @@ export class WorkflowRuntime {
       resolve(this.paths.runDir(run.runId), 'impact-risk-scope.md'),
     );
     const now = this.now();
-    run.analysisHandoff.sourceSnapshot = this.sourceSnapshot(opts.sources);
+    run.analysisHandoff.sourceSnapshot = this.sourceSnapshot([
+      ...opts.sources,
+      ...this.citedDesignSources(run.runId),
+    ]);
     run.analysisHandoff.freshness = 'UNCHECKED';
     run.analysisHandoff.refreshedAt = now;
     run.analysisHandoff.refreshReason = opts.reason.trim();
@@ -1739,6 +2049,7 @@ export class WorkflowRuntime {
         : opts.message;
     }
     if (open.length) extra.data = { unpassedGates: open };
+    this.syncUsageQuietly(run);
     this.record(run, 'RUN_ABANDONED', extra);
     this.persist(run);
     this.unbindRun(run.runId);
@@ -1840,6 +2151,14 @@ export class WorkflowRuntime {
       // has to be ready: evidence, confidence and every open human checkpoint.
       if (mc.isImplementationNode(def, nodeId)) {
         this.assertImplementationReady(run, `entering "${nodeId}"`);
+        const drift = this.specWarnings(run);
+        if (drift.length) {
+          this.record(run, 'SPEC_DRIFT', {
+            node: nodeId,
+            message: drift.join('; '),
+            data: { warnings: drift },
+          });
+        }
       }
     }
     const wouldBeIllegal =
@@ -2034,6 +2353,9 @@ export class WorkflowRuntime {
       run.mission.updatedAt = this.now();
       delete run.mission.currentAction;
     }
+    // The transcript is complete exactly now, so this is the one moment the
+    // run's token usage can be read in full.
+    this.syncUsageQuietly(run);
     this.record(run, 'RUN_COMPLETED', { node: run.currentNode });
     this.persist(run);
     this.unbindRun(run.runId);
@@ -2051,6 +2373,7 @@ export class WorkflowRuntime {
     }
     const extra: Partial<WorkflowEvent> = { node: run.currentNode };
     if (opts.message) extra.message = opts.message;
+    this.syncUsageQuietly(run);
     this.record(run, 'RUN_FAILED', extra);
     this.persist(run);
     this.unbindRun(run.runId);

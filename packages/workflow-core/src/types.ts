@@ -2,6 +2,7 @@
 
 // Type-only, so the mission/types cycle is erased at runtime.
 import type { MissionRecord } from './mission.js';
+import { SPEC_MAP_ARTIFACT } from './spec.js';
 
 export type NodeKind = 'start' | 'phase' | 'waiting' | 'end';
 
@@ -128,6 +129,7 @@ export const SOLUTION_ANALYSIS_ARTIFACTS = [
   'recommended-solution.md',
   'implementation-plan.md',
   'test-strategy.md',
+  SPEC_MAP_ARTIFACT,
 ] as const;
 
 export type SolutionAnalysisArtifact = (typeof SOLUTION_ANALYSIS_ARTIFACTS)[number];
@@ -255,6 +257,7 @@ export type EventType =
   | 'ANALYSIS_HANDOFF'
   | 'ANALYSIS_FRESHNESS'
   | 'ANALYSIS_REFRESHED'
+  | 'SPEC_DRIFT'
   // mission control — the Tech Lead layer over the topology
   | 'MISSION_CLASSIFIED'
   | 'MISSION_PLANNED'
@@ -285,6 +288,17 @@ export type EventType =
   | 'GATE_FAIL'
   | 'ARTIFACT'
   | 'NOTE'
+  // observability — normalised, redacted telemetry derived from tool calls.
+  // These never decide anything: they are facts about what the tools touched.
+  | 'FILE_READ'
+  | 'FILE_CHANGED'
+  | 'COMMAND_STARTED'
+  | 'COMMAND_COMPLETED'
+  | 'COMMAND_FAILED'
+  | 'TEST_STARTED'
+  | 'TEST_PASSED'
+  | 'TEST_FAILED'
+  | 'USAGE_RECORDED'
   // runtime — emitted by Claude Code hooks
   | 'SESSION_START'
   | 'SESSION_END'
@@ -410,6 +424,15 @@ export interface KitConfig {
    * human opens. Empty string disables publishing.
    */
   analysisReportDir: string;
+  /**
+   * Per-million-token prices, keyed by model id. Empty by default: a cost the
+   * user never configured is reported as unavailable rather than estimated from
+   * prices that may be wrong or stale.
+   */
+  pricing?: Record<
+    string,
+    { inputPer1M?: number; outputPer1M?: number; cacheReadPer1M?: number; cacheWritePer1M?: number }
+  >;
   preset?: string;
   version?: string;
 }

@@ -101,6 +101,24 @@ export function applyHook(runtime: WorkflowRuntime, payload: ClaudeHookPayload):
   // that is what left one dead RUNNING run behind per Claude session.
   const autoStart = type === 'PROMPT_SUBMIT';
   const run = runtime.recordRuntimeEvent(type, data, { autoStart });
+
+  // Observability: the tool payload exists here and nowhere else. It is
+  // normalised to a path or a program name and then dropped — see telemetry.ts
+  // for what is deliberately not persisted. A failure here must never surface,
+  // because telemetry is not worth breaking a session over.
+  const phase = type === 'TOOL_START' ? 'start' : type === 'TOOL_END' ? 'end' : type === 'TOOL_FAIL' ? 'fail' : undefined;
+  if (run && phase) {
+    try {
+      runtime.recordObservations(run.runId, {
+        phase,
+        ...(payload.tool_name ? { toolName: payload.tool_name } : {}),
+        ...(payload.tool_input ? { toolInput: payload.tool_input } : {}),
+      });
+    } catch {
+      // telemetry is best-effort by design
+    }
+  }
+
   const result: HookResult = {};
   if (run) result.runId = run.runId;
   if (mutation) result.mutation = mutation;

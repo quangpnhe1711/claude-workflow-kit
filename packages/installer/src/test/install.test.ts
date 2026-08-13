@@ -252,6 +252,7 @@ test('report templates are complete, reusable, and preserved on update', () => {
       'recommended-solution.md',
       'implementation-plan.md',
       'test-strategy.md',
+      'spec-map.md',
       'task-intake.md',
     ];
     for (const name of names) assert.ok(existsSync(join(templates, name)), `${name} installed`);
