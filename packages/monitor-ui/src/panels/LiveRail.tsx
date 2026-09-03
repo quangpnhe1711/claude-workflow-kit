@@ -1,4 +1,5 @@
 import { ago } from '../derive';
+import { useProjectId } from '../project';
 import { href } from '../router';
 import type { Snapshot } from '../types';
 
@@ -16,6 +17,7 @@ interface Props {
  * Run Explorer, which reads the index instead.
  */
 export function LiveRail({ snapshot, nowMs, activeRunId }: Props) {
+  const projectId = useProjectId();
   const runs = snapshot.runs;
   const waiting = runs.filter((run) => (run.missionSummary?.pendingCheckpoints ?? 0) > 0).length;
 
@@ -45,7 +47,7 @@ export function LiveRail({ snapshot, nowMs, activeRunId }: Props) {
                 className={`rail__item${run.runId === activeRunId ? ' is-selected' : ''}${
                   pending > 0 ? ' needs-you' : ''
                 }`}
-                href={href({ name: 'run', runId: run.runId })}
+                href={href({ name: 'run', projectId, runId: run.runId })}
                 aria-current={run.runId === activeRunId}
               >
                 <div className="rail__row">
@@ -79,7 +81,7 @@ export function LiveRail({ snapshot, nowMs, activeRunId }: Props) {
       </ul>
 
       {typeof snapshot.totalRuns === 'number' && snapshot.totalRuns > runs.length && (
-        <a className="rail__more" href={href({ name: 'runs' })}>
+        <a className="rail__more" href={href({ name: 'runs', projectId })}>
           {snapshot.totalRuns - runs.length} more in history →
         </a>
       )}

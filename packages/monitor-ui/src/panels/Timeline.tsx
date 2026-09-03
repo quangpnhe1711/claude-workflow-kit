@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchEvents } from '../api';
+import { useProjectId } from '../project';
 import { clock } from '../derive';
 import { describeEvent } from '../eventText';
 import type { WorkflowEvent } from '../types';
@@ -22,6 +23,7 @@ const PAGE = 200;
  * of JSON to open.
  */
 export function Timeline({ runId, tail, eventBytes }: Props) {
+  const projectId = useProjectId();
   const [full, setFull] = useState(false);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
   const [cursor, setCursor] = useState(0);
@@ -36,13 +38,13 @@ export function Timeline({ runId, tail, eventBytes }: Props) {
     setCursor(0);
     setMore(false);
     setError(null);
-  }, [runId]);
+  }, [projectId, runId]);
 
   const load = async (after: number): Promise<void> => {
     setLoading(true);
     setError(null);
     try {
-      const page = await fetchEvents(runId, after, PAGE);
+      const page = await fetchEvents(projectId, runId, after, PAGE);
       setEvents((current) => (after === 0 ? page.events : [...current, ...page.events]));
       setCursor(page.cursor);
       setMore(page.hasMore);

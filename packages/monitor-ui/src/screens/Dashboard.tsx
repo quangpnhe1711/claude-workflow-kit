@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchAnalytics } from '../api';
+import { useProjectId } from '../project';
 import { ago, formatDuration } from '../derive';
 import { href } from '../router';
 import type { Analytics, Snapshot } from '../types';
@@ -19,13 +20,14 @@ function percent(value: number | null): string {
  * that reads like a measurement.
  */
 export function Dashboard({ snapshot, nowMs }: Props) {
+  const projectId = useProjectId();
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const liveVersion = snapshot.runs.map((r) => `${r.runId}:${r.status}`).join(',');
 
   useEffect(() => {
     let cancelled = false;
-    fetchAnalytics()
+    fetchAnalytics(projectId)
       .then((next) => {
         if (!cancelled) setAnalytics(next);
       })
@@ -35,7 +37,7 @@ export function Dashboard({ snapshot, nowMs }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [liveVersion]);
+  }, [projectId, liveVersion]);
 
   if (error) {
     return (
@@ -103,7 +105,7 @@ export function Dashboard({ snapshot, nowMs }: Props) {
           <ul className="detail__list">
             {waiting.map((run) => (
               <li key={run.runId}>
-                <a className="table__link" href={href({ name: 'run', runId: run.runId })}>
+                <a className="table__link" href={href({ name: 'run', projectId, runId: run.runId })}>
                   {run.label ?? run.runId}
                 </a>{' '}
                 <span className="dim">
@@ -154,14 +156,14 @@ export function Dashboard({ snapshot, nowMs }: Props) {
               <span className={`pill pill--${run.derivedStatus.toLowerCase()}`}>
                 {run.derivedStatus.replace('_', ' ')}
               </span>{' '}
-              <a className="table__link" href={href({ name: 'run', runId: run.runId })}>
+              <a className="table__link" href={href({ name: 'run', projectId, runId: run.runId })}>
                 {run.label ?? run.runId}
               </a>{' '}
               <span className="dim">{ago(run.lastActivityAt, nowMs)}</span>
             </li>
           ))}
         </ul>
-        <a className="rail__more" href={href({ name: 'runs' })}>
+        <a className="rail__more" href={href({ name: 'runs', projectId })}>
           All runs →
         </a>
       </section>

@@ -11,7 +11,10 @@ export interface Preset {
   description: string;
   workflows: string[];
   skills: string[];
-  templates?: string[];
+  /** Scoped repository-knowledge files installed into `.claude/instructions/`. */
+  instructions?: string[];
+  /** Output contracts installed into `.claude/prompts/`, read only on demand. */
+  prompts?: string[];
   agents: string[];
   claudeMd: string;
   dir: string;

@@ -1,37 +1,13 @@
 /**
- * Hash routing in twenty lines. The monitor is served from a plain node:http
- * server with a catch-all, and the whole app is four screens — a router library
- * would be more configuration than code.
+ * The browser half of routing: reading the hash, and changing it.
+ *
+ * Everything that only reasons about routes lives in `routes.ts`, which has no
+ * React and no `window` — so the route table can be tested without a DOM.
  */
 import { useEffect, useState } from 'react';
+import { href, parseRoute, type Route } from './routes.js';
 
-export type Route =
-  | { name: 'dashboard' }
-  | { name: 'runs' }
-  | { name: 'run'; runId: string }
-  | { name: 'skills' };
-
-export function parseRoute(hash: string): Route {
-  const path = hash.replace(/^#\/?/, '').split('?')[0] ?? '';
-  const [head, tail] = path.split('/');
-  if (head === 'runs' && tail) return { name: 'run', runId: decodeURIComponent(tail) };
-  if (head === 'runs') return { name: 'runs' };
-  if (head === 'skills') return { name: 'skills' };
-  return { name: 'dashboard' };
-}
-
-export function href(route: Route): string {
-  switch (route.name) {
-    case 'run':
-      return `#/runs/${encodeURIComponent(route.runId)}`;
-    case 'runs':
-      return '#/runs';
-    case 'skills':
-      return '#/skills';
-    default:
-      return '#/dashboard';
-  }
-}
+export * from './routes.js';
 
 export function navigate(route: Route): void {
   window.location.hash = href(route);

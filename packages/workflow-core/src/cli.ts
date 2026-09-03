@@ -136,7 +136,7 @@ Mission Control (the Tech Lead layer over the topology):
   cw mission action "<what the mission is doing right now>"
   cw mission accept-risk --reason "..." [--blockers "a;b"]   "Proceed Anyway", audited
   cw mission show [--json]
-  cw mission template [--type <taskType>]    report template for this task type
+  cw mission template [--type <taskType>]    output contract for this task type
 
   cw checkpoint open <KIND> --summary "..." --decision "..." [--recommend "..."]
       [--alternatives "a;b"] [--evidence "a;b"] [--risk medium] [--impact "..."]
@@ -156,7 +156,7 @@ enforced when the implementation phase is entered.
   cw status [--json]          compact "where am I" for the current run
   cw review-context [--run <id>] [--json]    canonical pointers for a reviewer
   cw policy [--json]          is the PreToolUse policy actually running?
-  cw conventions status [--json]
+  cw instructions status [--json]   freshness of .claude/instructions/
   cw workflows [--json]
   cw init-runtime             create the runtime directory skeleton
 
@@ -1410,9 +1410,12 @@ export async function runCli(argv: string[]): Promise<number> {
       return 0;
     }
 
+    // `conventions` is the pre-0.2 name for the same report; kept so an installed
+    // project that still types it gets an answer instead of "unknown command".
+    case 'instructions':
     case 'conventions': {
       const sub = positional[1] ?? 'status';
-      if (sub !== 'status') throw new TransitionError(`unknown: cw conventions ${sub}`);
+      if (sub !== 'status') throw new TransitionError(`unknown: cw ${command} ${sub}`);
       const report = runtime.conventions();
       if (json) {
         process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

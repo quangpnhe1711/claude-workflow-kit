@@ -1,15 +1,11 @@
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
-import { WorkflowRuntime, type RunQuery } from '@claude-workflow-kit/workflow-core';
-import { ActionError, applyBoardAction, type ActionRequest } from './actions.js';
-import {
-  buildAnalytics,
-  buildRunDetail,
-  buildSnapshot,
-  snapshotSignature,
-  type MonitorSnapshot,
-} from './snapshot.js';
+import { basename, extname, join, normalize, resolve, sep } from 'node:path';
+import { WorkflowRuntime } from '@claude-workflow-kit/workflow-core';
+import { handleRuntimeRoute } from './runtime-routes.js';
+import { MIME, handlePreflight, sendError, sendJson, sendText } from './http.js';
+import { summariseRuntime, type ProjectSummary } from './project-summary.js';
+import { buildSnapshot, snapshotSignature, type MonitorSnapshot } from './snapshot.js';
 
 export interface MonitorOptions {
   projectRoot?: string;
@@ -22,85 +18,31 @@ export interface MonitorOptions {
   pollMs?: number;
 }
 
-const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.woff2': 'font/woff2',
-  '.ico': 'image/x-icon',
-  '.md': 'text/markdown; charset=utf-8',
-};
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store',
-    'access-control-allow-origin': '*',
-  });
-  res.end(payload);
-}
-
-function sendText(res: ServerResponse, status: number, body: string, type = 'text/plain; charset=utf-8'): void {
-  res.writeHead(status, { 'content-type': type, 'access-control-allow-origin': '*' });
-  res.end(body);
-}
-
-const MAX_BODY_BYTES = 64 * 1024;
-
-function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  return new Promise((done, fail) => {
-    let size = 0;
-    const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        fail(new ActionError('request body is too large', 413));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      const raw = Buffer.concat(chunks).toString('utf8').trim();
-      if (!raw) return done({});
-      try {
-        done(JSON.parse(raw));
-      } catch (error) {
-        fail(new ActionError(`body is not JSON: ${(error as Error).message}`));
-      }
-    });
-    req.on('error', (error) => fail(error));
-  });
-}
-
-/**
- * The API is readable from anywhere (`access-control-allow-origin: *`) because it
- * is local telemetry. Writing is different: any web page the user has open could
- * POST to localhost and approve a checkpoint on their behalf. Browsers always send
- * `Origin` on a cross-origin POST and cannot forge it, so a mismatched Origin is
- * refused. A tool with no Origin at all (curl, a script) is not a browser and is
- * allowed — it already has shell access to run `cw` directly.
- */
-function sameOrigin(req: IncomingMessage, port: number): boolean {
-  const origin = req.headers['origin'];
-  if (!origin || Array.isArray(origin)) return !origin;
-  try {
-    const url = new URL(origin);
-    if (url.port && url.port !== String(port)) return false;
-    return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname);
-  } catch {
-    return false;
-  }
-}
-
 export interface MonitorHandle {
   server: Server;
   port: number;
   url: string;
   close: () => Promise<void>;
+}
+
+/**
+ * Serve `uiDir` for any path the API did not claim, falling back to
+ * `index.html` so the hash router owns client-side routes. Exported because the
+ * app server serves the same bundle from the same directory.
+ */
+export function createStaticHandler(uiDir?: string): (pathname: string, res: ServerResponse) => boolean {
+  const root = uiDir && existsSync(uiDir) ? resolve(uiDir) : undefined;
+  return (pathname, res) => {
+    if (!root) return false;
+    const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+    const target = normalize(join(root, relative));
+    if (!target.startsWith(root + sep) && target !== join(root, 'index.html')) return false;
+    const file = existsSync(target) && statSync(target).isFile() ? target : join(root, 'index.html');
+    if (!existsSync(file)) return false;
+    res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' });
+    createReadStream(file).pipe(res);
+    return true;
+  };
 }
 
 export function createMonitorServer(options: MonitorOptions = {}): MonitorHandle {
@@ -112,7 +54,24 @@ export function createMonitorServer(options: MonitorOptions = {}): MonitorHandle
   const port = options.port ?? runtime.config.monitorPort;
   const host = options.host ?? '127.0.0.1';
   const pollMs = options.pollMs ?? 1000;
-  const uiDir = options.uiDir && existsSync(options.uiDir) ? resolve(options.uiDir) : undefined;
+  const serveStatic = createStaticHandler(options.uiDir);
+
+  // The UI bundle is the app's, and the app asks for a project list before it
+  // renders anything. The monitor answers as a workspace of exactly one project:
+  // the same shape, with nothing it cannot honestly offer — no installer, no
+  // launcher, and no second project to switch to.
+  const soleProjectId = 'local';
+  const identity = {
+    id: soleProjectId,
+    name: basename(runtime.paths.projectRoot) || soleProjectId,
+    path: runtime.paths.projectRoot,
+    runtimeDir: runtime.config.runtimeDir,
+    available: true,
+    installed: existsSync(runtime.paths.configFile),
+    ...(runtime.config.preset ? { preset: runtime.config.preset } : {}),
+    monitorPort: runtime.config.monitorPort,
+  };
+  const summarise = (): ProjectSummary[] => [summariseRuntime(runtime, identity)];
 
   const clients = new Set<ServerResponse>();
   let lastSignature = '';
@@ -138,142 +97,13 @@ export function createMonitorServer(options: MonitorOptions = {}): MonitorHandle
   }, pollMs);
   timer.unref?.();
 
-  function serveStatic(pathname: string, res: ServerResponse): boolean {
-    if (!uiDir) return false;
-    const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-    const target = normalize(join(uiDir, relative));
-    if (!target.startsWith(uiDir + sep) && target !== join(uiDir, 'index.html')) return false;
-    const file = existsSync(target) && statSync(target).isFile() ? target : join(uiDir, 'index.html');
-    if (!existsSync(file)) return false;
-    res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' });
-    createReadStream(file).pipe(res);
-    return true;
-  }
-
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
 
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, {
-        'access-control-allow-origin': '*',
-        'access-control-allow-headers': 'content-type',
-        'access-control-allow-methods': 'GET,POST,OPTIONS',
-      });
-      res.end();
-      return;
-    }
+    if (handlePreflight(req, res)) return;
 
     try {
-      if (path === '/api/health') {
-        sendJson(res, 200, { ok: true, projectRoot: runtime.paths.projectRoot });
-        return;
-      }
-
-      if (path === '/api/state') {
-        sendJson(res, 200, buildSnapshot(runtime));
-        return;
-      }
-
-      // History. Answered from the derived index, so the cost is the page size
-      // and not the size of the archive.
-      if (path === '/api/runs') {
-        const status = url.searchParams.getAll('status').flatMap((v) => v.split(',')).filter(Boolean);
-        const query: RunQuery = {};
-        if (status.length) query.status = status;
-        for (const key of ['workflow', 'skill', 'q', 'since', 'until'] as const) {
-          const value = url.searchParams.get(key);
-          if (value) query[key] = value;
-        }
-        const sort = url.searchParams.get('sort');
-        if (sort === 'started' || sort === 'duration' || sort === 'updated') query.sort = sort;
-        if (url.searchParams.get('order') === 'asc') query.order = 'asc';
-        const offset = Number(url.searchParams.get('offset'));
-        if (Number.isFinite(offset) && offset > 0) query.offset = offset;
-        const limit = Number(url.searchParams.get('limit'));
-        if (Number.isFinite(limit) && limit > 0) query.limit = limit;
-        sendJson(res, 200, runtime.queryRuns(query));
-        return;
-      }
-
-      if (path === '/api/analytics') {
-        sendJson(res, 200, buildAnalytics(runtime));
-        return;
-      }
-
-      const eventsMatch = /^\/api\/runs\/([^/]+)\/events$/.exec(path);
-      if (eventsMatch) {
-        const runId = decodeURIComponent(eventsMatch[1]!);
-        const after = Number(url.searchParams.get('after'));
-        const limit = Number(url.searchParams.get('limit'));
-        sendJson(res, 200, {
-          runId,
-          ...runtime.eventPage(runId, {
-            ...(Number.isFinite(after) && after > 0 ? { after } : {}),
-            ...(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
-          }),
-        });
-        return;
-      }
-
-      const rollupMatch = /^\/api\/runs\/([^/]+)\/rollup$/.exec(path);
-      if (rollupMatch) {
-        sendJson(res, 200, runtime.rollup(decodeURIComponent(rollupMatch[1]!)));
-        return;
-      }
-
-      const actionMatch = /^\/api\/runs\/([^/]+)\/actions$/.exec(path);
-      if (actionMatch) {
-        if (req.method !== 'POST') {
-          sendJson(res, 405, { error: 'use POST to send a Mission Board action' });
-          return;
-        }
-        if (!sameOrigin(req, port)) {
-          sendJson(res, 403, {
-            error: 'cross-origin Mission Board actions are refused; open the monitor UI itself',
-          });
-          return;
-        }
-        const runId = decodeURIComponent(actionMatch[1]!);
-        readJsonBody(req)
-          .then((body) => {
-            const detail = applyBoardAction(runtime, runId, (body ?? {}) as ActionRequest);
-            // The board must not wait a poll tick to show the user their own click.
-            lastSignature = '';
-            sendJson(res, 200, detail);
-          })
-          .catch((error: unknown) => {
-            const status = error instanceof ActionError ? error.status : 400;
-            sendJson(res, status, {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
-        return;
-      }
-
-      const runMatch = /^\/api\/runs\/([^/]+)$/.exec(path);
-      if (runMatch) {
-        sendJson(res, 200, buildRunDetail(runtime, decodeURIComponent(runMatch[1]!)));
-        return;
-      }
-
-      const artifactMatch = /^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)$/.exec(path);
-      if (artifactMatch) {
-        const runId = decodeURIComponent(artifactMatch[1]!);
-        const name = decodeURIComponent(artifactMatch[2]!);
-        if (name.includes('..') || name.includes('/') || name.includes('\\')) {
-          sendJson(res, 400, { error: 'invalid artifact name' });
-          return;
-        }
-        const file = join(runtime.paths.runDir(runId), name);
-        if (!existsSync(file)) {
-          sendJson(res, 404, { error: 'artifact not found' });
-          return;
-        }
-        sendText(res, 200, readFileSync(file, 'utf8'), MIME[extname(file)] ?? 'text/plain; charset=utf-8');
-        return;
-      }
-
       if (path === '/api/stream') {
         res.writeHead(200, {
           'content-type': 'text/event-stream',
@@ -282,6 +112,12 @@ export function createMonitorServer(options: MonitorOptions = {}): MonitorHandle
           'access-control-allow-origin': '*',
         });
         res.write(`retry: 2000\n\n`);
+        res.write(
+          `event: workspace\ndata: ${JSON.stringify({
+            projects: summarise(),
+            lastProjectId: soleProjectId,
+          })}\n\n`,
+        );
         res.write(`event: snapshot\ndata: ${JSON.stringify(buildSnapshot(runtime))}\n\n`);
         clients.add(res);
         // Keeps proxies and idle sockets from dropping the stream.
@@ -294,7 +130,60 @@ export function createMonitorServer(options: MonitorOptions = {}): MonitorHandle
         return;
       }
 
-      if (path.startsWith('/api/')) {
+      if (path === '/api/app') {
+        sendJson(res, 200, {
+          ok: true,
+          version: null,
+          // The monitor cannot install and cannot start a session; saying so is
+          // what makes the UI hide those screens instead of offering dead buttons.
+          capabilities: { provisioning: false, launcher: false },
+          claude: { ok: false, bin: 'claude', detail: 'not available from `cw monitor`; use `cw app`' },
+          presets: [],
+          lastProjectId: soleProjectId,
+          projects: summarise(),
+          workspaceFile: runtime.paths.runtimeDir,
+        });
+        return;
+      }
+
+      if (path === '/api/projects') {
+        sendJson(res, 200, { projects: summarise(), lastProjectId: soleProjectId });
+        return;
+      }
+
+      if (path.startsWith('/api')) {
+        // `/api/projects/local/...` is the app dialect; `/api/...` is the
+        // monitor's original one. Both reach the same table, so scripts written
+        // against `cw monitor` keep working while the shared UI speaks projects.
+        const projectMatch = /^\/api\/projects\/([^/]+)((?:\/.*)?)$/.exec(path);
+        if (projectMatch && decodeURIComponent(projectMatch[1]!) !== soleProjectId) {
+          sendJson(res, 404, {
+            error: `this is a single-project monitor; it only serves "${soleProjectId}"`,
+          });
+          return;
+        }
+        const rest = projectMatch ? (projectMatch[2] ?? '') : path.slice('/api'.length);
+        if (projectMatch && (rest === '' || rest === '/')) {
+          sendJson(res, 200, { project: summarise()[0] });
+          return;
+        }
+        // The app marks a project as recently opened; there is only one here.
+        if (projectMatch && rest === '/open') {
+          sendJson(res, 200, { lastProjectId: soleProjectId });
+          return;
+        }
+
+        const handled = handleRuntimeRoute(runtime, {
+          req,
+          res,
+          url,
+          rest,
+          port,
+          onMutation: () => {
+            lastSignature = '';
+          },
+        });
+        if (handled) return;
         sendJson(res, 404, { error: `unknown endpoint ${path}` });
         return;
       }
@@ -302,7 +191,7 @@ export function createMonitorServer(options: MonitorOptions = {}): MonitorHandle
       if (serveStatic(path, res)) return;
       sendText(res, 404, 'monitor UI is not built. Run: npm run build\n');
     } catch (error) {
-      sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+      sendError(res, error, 500);
     }
   });
 

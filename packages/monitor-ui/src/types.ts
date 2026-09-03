@@ -166,3 +166,129 @@ export type NodeStatusView =
   | 'FAILED'
   | 'SKIPPED'
   | 'STALE';
+
+// --- app (multi-project) -----------------------------------------------------
+
+/** One row in the project switcher, built from the derived run index. */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  path: string;
+  runtimeDir: string;
+  available: boolean;
+  installed: boolean;
+  preset?: string;
+  monitorPort?: number;
+  activeRuns: number;
+  waitingRuns: number;
+  pendingCheckpoints: number;
+  totalRuns: number;
+  currentRunId?: string;
+  lastActivityAt?: string;
+  error?: string;
+}
+
+/** What the app can do here — the UI hides what this build cannot offer. */
+export interface AppInfo {
+  ok: boolean;
+  version: string | null;
+  capabilities: { provisioning: boolean; launcher: boolean };
+  claude: { ok: boolean; bin: string; detail: string };
+  presets: string[];
+  lastProjectId: string | null;
+  projects: ProjectSummary[];
+  workspaceFile: string;
+}
+
+export interface DoctorCheck {
+  name: string;
+  status: 'ok' | 'warn' | 'fail';
+  detail: string;
+}
+
+export interface ConfigView {
+  config: Record<string, unknown> & {
+    runtimeDir: string;
+    monitorPort: number;
+    stallThresholdSeconds: number;
+    semanticLagThresholdSeconds: number;
+    autoGenericRun: boolean;
+    enforceGates: boolean;
+    analysisReportDir?: string;
+    preset?: string;
+  };
+  editable: string[];
+  file: string;
+  exists: boolean;
+}
+
+export type LaunchMode = 'plan' | 'default' | 'acceptEdits' | 'bypassPermissions';
+
+export type TaskStatus = 'RUNNING' | 'DONE' | 'FAILED' | 'STOPPED' | 'UNKNOWN';
+
+export interface TaskRecord {
+  id: string;
+  projectId: string;
+  prompt: string;
+  mode: LaunchMode;
+  status: TaskStatus;
+  pid?: number;
+  startedAt: string;
+  endedAt?: string;
+  exitCode?: number | null;
+  signal?: string;
+  runId?: string;
+  error?: string;
+}
+
+export interface TaskOutputPage {
+  taskId: string;
+  cursor: number;
+  size: number;
+  text: string;
+  done: boolean;
+}
+
+/** The install result the app shows after "Add project" or "Update". */
+export interface InstallOutcome {
+  written: string[];
+  skipped: string[];
+  backups: string[];
+  conflicts: string[];
+  projectRoot: string;
+}
+
+/** One project's contribution to the workspace roll-up. */
+export interface ProjectAnalyticsRow {
+  id: string;
+  name: string;
+  totalRuns: number;
+  active: number;
+  blocked: number;
+  completed: number;
+  failed: number;
+  abandoned: number;
+  successRate: number | null;
+  averageDurationMs: number | null;
+  totalTokens: number | null;
+  estimatedCost: number | null;
+  error?: string;
+}
+
+export interface WorkspaceAnalytics {
+  generatedAt: string;
+  projects: ProjectAnalyticsRow[];
+  totals: {
+    projects: number;
+    installed: number;
+    totalRuns: number;
+    active: number;
+    blocked: number;
+    completed: number;
+    failed: number;
+    abandoned: number;
+    successRate: number | null;
+    totalTokens: number | null;
+    estimatedCost: number | null;
+  };
+}

@@ -43,12 +43,13 @@ What happens:
   hooks preserved, backup written.
 - `CLAUDE.md` — the kit's rules land inside `<!-- CW:START -->…<!-- CW:END -->`.
   Project-specific rules outside the markers are untouched, backup written.
-- `.ai-workflow/{config.json,conventions/,templates/,runs/}` created. Existing
-  conventions and report templates are reused; only missing default templates
-  are added.
-- `solution-analysis` skills and artifact templates are added when missing.
+- `.claude/prompts/*` — output contracts, read only when a document is asked
+  for. `.claude/instructions/` is created with its contract; its content comes
+  from `/map-repo`, never from the package.
+- `.ai-workflow/{config.json,runs/}` created. Nothing else is runtime state any
+  more: shared knowledge lives under `.claude/`.
   Existing customized or legacy-ownership files are preserved and reported;
-  `doctor` explains any manual merge needed for handoff routing.
+  `doctor` explains any manual merge needed.
 
 ## 4. Verify
 
@@ -73,20 +74,22 @@ constraints, module ownership).
 npx cw monitor        # http://127.0.0.1:4173
 ```
 
-Then, inside Claude Code, run a bounded real change with `/work` and confirm it
-uses `quick-fix` or `standard-change` rather than a full graph.
+Then, inside Claude Code, just describe a bounded real change. Confirm it runs
+natively: no classification block, no artifacts, and a
+`Changed / Why / Verified` response. The monitor shows a `generic` run with live
+tool activity — that is the expected shape for ordinary work.
 
-For the hard-gate probe below, deliberately run an L3 example with
-`/feature-change` (for example a migration/compatibility change).
-Watch the diagram: phases should advance as the work advances, the gate should
-turn amber when Claude asks a business question, and the active node should
-show the live tool.
+For the hard-gate probe, deliberately run an irreversible example with
+`/deep-change` (a migration or a permission change over existing data). Watch the
+diagram: phases should advance as the work advances, the gate should turn amber
+if Claude has a real decision to ask about, and the active node should show the
+live tool.
 
 Two things to check deliberately on the first run:
 
-- Ask Claude to edit a file before the business decision is resolved. The
-  `PreToolUse` hook must refuse it, naming `BUSINESS_READY`. If the edit goes
-  through, `enforceGates` is off or the hooks are not wired — run `doctor`.
+- Ask Claude to edit a file before the decision is recorded. The `PreToolUse`
+  hook must refuse it, naming `DECISION_READY`. If the edit goes through,
+  `enforceGates` is off or the hooks are not wired — run `doctor`.
 - If the diagram lags the conversation, the skill is not emitting `cw`. The run
   is flagged `semantic lag` in the monitor and by `doctor`; the engineering work
   itself is unaffected.
@@ -94,8 +97,8 @@ Two things to check deliberately on the first run:
 ## 7. Decide what to commit
 
 ```
-.ai-workflow/conventions/    commit — shared repository knowledge
-.ai-workflow/templates/      commit — shared report structures
+.claude/instructions/        commit — scoped repository knowledge
+.claude/prompts/             commit — output contracts
 .ai-workflow/runs/           gitignored by default (a .gitignore is installed)
 .ai-workflow/config.json     gitignored — it holds an absolute runtimeUrl for
                              this machine; re-created by `init` on each clone

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchAnalytics } from '../api';
+import { useProjectId } from '../project';
 import { formatDuration } from '../derive';
 import type { Analytics, Snapshot } from '../types';
 
@@ -16,11 +17,12 @@ interface Props {
  * shows no statistics rather than zeroes.
  */
 export function Skills({ snapshot }: Props) {
+  const projectId = useProjectId();
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetchAnalytics()
+    fetchAnalytics(projectId)
       .then((next) => {
         if (!cancelled) setAnalytics(next);
       })
@@ -28,7 +30,7 @@ export function Skills({ snapshot }: Props) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [projectId]);
 
   const statOf = (skill: string) => analytics?.skills.find((s) => s.skill === skill);
 

@@ -9,14 +9,10 @@
  */
 import { WorkflowRuntime, type MissionState } from '@claude-workflow-kit/workflow-core';
 import { buildRunDetail, type RunDetail } from './snapshot.js';
+import { HttpError } from './http.js';
 
-export class ActionError extends Error {
-  readonly status: number;
-  constructor(message: string, status = 400) {
-    super(message);
-    this.status = status;
-  }
-}
+/** A board action the runtime refused, or one the request did not describe fully. */
+export class ActionError extends HttpError {}
 
 export interface ActionRequest {
   action: string;

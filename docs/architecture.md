@@ -2,6 +2,23 @@
 
 Phase 1 deliverable. Written before implementation.
 
+> **Capability architecture (2026-08-31).** The preset no longer routes tasks
+> through a workflow framework. Measured against a plain senior-developer prompt,
+> the phase/category split below (`quick-fix`, `standard-change`,
+> `feature-change`, `bug-fix`, plus `wf-*` phase skills) cost latency and
+> artifacts on ordinary work without improving the result: it made compliance the
+> deliverable instead of the change. It is replaced by four layers with one
+> responsibility each — a small global `CLAUDE.md`, scoped repository knowledge in
+> `.claude/instructions/`, ten specialist capabilities in `.claude/skills/`, and
+> output contracts in `.claude/prompts/` — plus one gated topology,
+> `deep-change`, for work that cannot be undone by reverting code. Ordinary tasks
+> run natively; depth is chosen from change surface, uncertainty and blast
+> radius, discovered while reading the code. Decisions D42-D47 record why.
+> Everything below §2 still describes the runtime, which is unchanged except for
+> the new topology and the relocation of the knowledge layer; the L0-L3 and
+> Lightning/Fast/Standard/Deep vocabulary now describes `cw mission` routing,
+> which is opt-in runtime functionality rather than the default path.
+>
 > **Current adaptive policy (2026-08-04).** The original extraction below
 > documents where the kit came from. Runtime behavior now classifies L0-L3:
 > `quick-fix` owns L0-L1, gate-free `standard-change` owns L2, and the original
@@ -93,7 +110,7 @@ Target project after `init` (no toolkit source copied in):
 
 ```
 my-project/
-├── .claude/{skills,agents,hooks,settings.json}
+├── .claude/{skills,prompts,instructions,agents,hooks,settings.json}
 ├── .ai-workflow/{config.json,conventions/,templates/,runs/,current-run}
 └── CLAUDE.md   (managed block only)
 ```
@@ -333,10 +350,132 @@ run used; a partially priced run reports no cost rather than a number that looks
 complete. `USAGE_RECORDED` is a cumulative snapshot per session, not a delta, so
 running `cw usage sync` repeatedly cannot multiply the bill.
 
+**D36 — The workspace registry lives outside every repository.**
+`cw app` opens once and works across projects, while `.ai-workflow/` belongs to
+one repository and is committed with it. A registry stored inside a repo would
+either follow the wrong project or leak one developer's machine layout into
+everyone's history, so the list lives in `~/.claude-workflow-kit/workspace.json`
+(overridable with `CW_HOME`). A project's id is derived from its resolved path —
+case- and separator-normalised, because two spellings of one directory must not
+become two projects — which makes registering idempotent. Unregistering removes
+the row and nothing else: the kit stays installed, because the list of projects
+is the app's opinion and the contents of someone's repository are not.
+
+**D37 — Provisioning is injected into the app server, not imported by it.**
+The published package (`claude-workflow-kit`) already depends on the server
+packages, so an app server that imported `install`/`doctor` would close a
+dependency cycle. Instead `createAppServer` takes them as functions and the CLI
+supplies its own. A build without them answers `501` and the UI hides the
+buttons, which is why `cw monitor` can serve the same bundle while honestly
+offering neither installing nor launching.
+
+**D38 — One route table, mounted twice.**
+`handleRuntimeRoute` answers everything that comes from a single project's
+runtime. The monitor mounts it at `/api/…`, the app at `/api/projects/:id/…`,
+and the monitor also answers the app dialect for its one project. A project
+opened in `cw app` and the same project opened in `cw monitor` therefore cannot
+disagree about what a run looks like, and the original monitor URLs keep working
+for scripts written against them.
+
+**D39 — One SSE stream, carrying a project parameter.**
+A browser allows six connections per origin over HTTP/1.1 and `node:http` is
+HTTP/1.1, so a second EventSource for the project list would cost a connection
+and starve the first while a run is busy. `/api/stream?project=<id>` sends
+`workspace` frames always and `snapshot` frames for the named project. Snapshots
+are built only for projects a client is actually watching, so the tick cost
+scales with what is on screen rather than with the size of the registry.
+
+**D40 — The app can start a session; it starts it the way a terminal would.**
+`POST /api/projects/:id/tasks` spawns Claude Code in the project directory and
+records nothing itself: the session drives `cw` through the installed skills and
+hooks, so the run that appears is a real run rather than one the app invented.
+Three things are deliberate. The prompt is written to the child's **stdin**,
+never to argv — every argument is a literal from the launcher, which is what
+makes `shell: true` (unavoidable on Windows, where `claude` is a `.cmd` shim)
+safe rather than an injection point. The default permission mode is `plan`, and
+`acceptEdits` / `bypassPermissions` are refused without an explicit
+`confirmUnsafe`. And a task left `RUNNING` by a previous `cw app` is reported as
+`UNKNOWN` rather than adopted, because a pid this process did not spawn may since
+have been reused.
+
+**D41 — Config is editable from the app only where it cannot disable enforcement.**
+`monitorPort`, the two thresholds, `autoGenericRun`, `enforceGates` and
+`analysisReportDir` are editable; `mutationTools`, `mutationToolPatterns`,
+`commandTools`, `readOnlyCommands`, `runtimeUrl` and `stateSchemaVersion` are
+not. Those lists decide what the PreToolUse policy treats as a write, and a
+browser form that can empty one is a form that can switch gate enforcement off by
+accident. Rejected keys are named in the error rather than silently dropped, and
+the write merges into the file so an unmanaged key is never rewritten to a
+shipped default. `enforceGates` stays editable because switching it off is a
+deliberate, visible act — the monitor then reports `policy DISABLED`.
+
 **D25 — Installer ownership is hash-based and legacy-safe.**
 New manifests record hashes for framework-owned skills, agents, and hooks.
 Unmodified managed files update normally; modified, project-owned, or legacy
 files without provable ownership are preserved and reported as conflicts.
+
+**D42 — A skill exists only if deleting it removes a capability.**
+The test applied to every v1 skill was: *if this file is gone, what can Claude no
+longer do?* For `quick-fix`, `standard-change`, `feature-change`, `bug-fix`,
+`wf-implement`, `wf-validation-e2e` and `wf-final-report` the honest answer was
+"it is no longer forced through a step it already knows" — understand,
+investigate, implement, test is native behavior, and wrapping it in a skill only
+adds instructions to read. They were deleted. What replaced them are methods a
+competent engineer has to be taught: value bisection, join and NULL equivalence,
+expand/contract migration, the breaking-change taxonomy, parity corpora and
+tolerances, measure-before-optimize. A skill is a capability, never a phase and
+never a task category.
+
+**D43 — Depth comes from three facts found in the code, not from the request's
+wording.** Change surface, uncertainty and blast radius decide how much work a
+task deserves; the words "bug", "feature" and "quick" decide nothing. This
+removes the classification step entirely — there is nothing to classify before
+reading — and fixes the two failures the category split produced: a trivial
+change routed to `feature-change` paid for a full topology, and a dangerous
+change described as a quick fix bought a cheap one. Escalation is by evidence:
+start narrow, and load a capability when reading turns up the trigger for it.
+Wide is explicitly not risky — a rename across forty files is reversible and
+stays ordinary.
+
+**D44 — One gate, not five.** `deep-change` replaces the two hard-gated
+topologies for preset purposes: a single `DECISION_READY` gate over a single
+`decision.md`, with the same PreToolUse enforcement. The v1 stack asked for
+`BUSINESS_READY`, `ROOT_CAUSE_READY`, three readiness artifacts and up to eight
+mandatory checkpoints, which trained users to approve without reading — a
+checkpoint that has no real decision behind it is worse than no checkpoint. The
+gate is now reserved for work that cannot be undone by reverting code:
+production data, destructive migrations, auth, money, external contracts. The
+legacy topologies remain in the runtime, enforced identically, for projects that
+want them.
+
+**D45 — Reporting structure is a separate layer from reasoning.**
+Twenty-six templates under `.ai-workflow/templates/` became eleven contracts
+under `.claude/prompts/`, selected through an index and read only when the user
+asked for a document. Most of the twenty-six differed by task category rather
+than by document shape — a CSS tweak and a cache change are both "what changed"
+— so they collapsed. A reasoning skill no longer carries formatting, and an
+ordinary task loads no formatting at all.
+
+**D46 — Repository knowledge is scoped, and lives beside what reads it.**
+`.ai-workflow/conventions/{code,comments,testing,database}.md` becomes
+`.claude/instructions/<area>.instructions.md` with `appliesTo` globs, so a
+frontend task never loads database knowledge. Areas are open and discovered from
+metadata and files rather than a fixed enum, because a repository has the areas
+it has. The freshness engine is kept unchanged in substance — evidence files are
+re-checked against `last_refresh` — because computed staleness is the only thing
+that stops a scoped instruction layer from rotting. Nothing is shipped
+pre-written: knowledge not derived from this repository would be a stale
+instruction on day one, so an unmapped project reports *no areas* instead of four
+failing ones. `cw conventions status` stays as an alias.
+
+**D47 — A subagent needs an independent source of truth, not a persona.**
+`business-analyst` and `root-cause-analyst` re-read the same files the main agent
+had just read and returned a differently-worded version of the same conclusion:
+latency and context for no independent evidence. They were deleted, and their
+methods became skills the main agent uses directly. `adversarial-reviewer`
+survives because it has both properties that justify a subagent — it reads the
+diff and the recorded decision itself, never the implementer's account, and its
+mission is adversarial rather than confirmatory.
 
 ## 4. Risks
 

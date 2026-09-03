@@ -37,13 +37,13 @@ Requirements: Node.js ≥ 18.17, Claude Code, git.
 | [2. Monitor — practical guide](#2-monitor--practical-guide) | what the screen means |
 | [3. Test the monitor in 5 minutes](#3-test-the-monitor-in-5-minutes) | literal walkthrough |
 | [4. Core concepts](#4-core-concepts) | workflow, skill, agent, gate, artifact, run |
-| [5. Core rules](#5-core-rules) | what is enforced, and how strictly |
-| [6. Workflow guide](#6-workflow-guide) | `/quick-fix`, `/feature-change`, `/bug-fix`, `/work`, … |
-| [7. Phase by phase](#7-phase-by-phase) | the real graph, every phase explained |
-| [8. Skills reference](#8-skills-reference) | all 24 skills |
-| [9. How context flows](#9-how-context-flows) | artifacts between phases |
+| [5. Core rules](#5-core-rules) | how depth is chosen, and what is enforced |
+| [6. Working guide](#6-working-guide) | the ordinary path, capabilities, the gated path |
+| [7. The gated path, phase by phase](#7-the-gated-path-phase-by-phase) | `deep-change`, every phase explained |
+| [8. Capabilities reference](#8-capabilities-reference) | the ten skills, the contracts, the one agent |
+| [9. How context flows](#9-how-context-flows) | why almost nothing is written to disk |
 | [10. `.ai-workflow` explained](#10-ai-workflow-explained) | files, and what to commit |
-| [11. Conventions](#11-conventions) | the repository knowledge cache |
+| [11. Repository instructions](#11-repository-instructions) | `.claude/instructions/`, the scoped knowledge layer |
 | [12. `cw` CLI reference](#12-cw-cli-reference) | every command |
 | [13. Run lifecycle](#13-run-lifecycle) | statuses and transitions |
 | [14. Hooks](#14-hooks) | what each Claude Code hook is for |
@@ -55,6 +55,7 @@ Requirements: Node.js ≥ 18.17, Claude Code, git.
 | [20. Extending the toolkit](#20-extending-the-toolkit) | new workflow / skill / phase |
 | [21. Known limitations](#21-known-limitations) | honest list |
 | [22. Mission Control](#22-mission-control) | routing, checkpoints, monitors, the board |
+| [23. The app](#23-the-app) | many projects, GUI install, launching tasks |
 
 ---
 
@@ -72,19 +73,21 @@ npx claude-workflow-kit init
 What this creates in your project:
 
 ```
-.claude/skills/          19 workflow skills (entry points + wf-* steps)
-.claude/agents/          business-analyst, root-cause-analyst, independent-reviewer
+.claude/skills/          10 specialist capabilities, loaded only when needed
+.claude/prompts/         11 output contracts, read only when you ask for a document
+.claude/instructions/    the contract for scoped repository knowledge (content: /map-repo)
+.claude/agents/          adversarial-reviewer
 .claude/hooks/cw-hook.mjs
 .claude/settings.json    kit hooks merged into your existing settings
 .claude/cw-runtime       records the runtime directory name
-.ai-workflow/            runtime: config.json, conventions/, templates/, runs/
+.ai-workflow/            runtime: config.json, runs/
 CLAUDE.md                your file + one managed <!-- CW:START --> block
 ```
 
 Nothing unmanaged is overwritten: `CLAUDE.md` gets a marked block, settings hooks
 are merged, and any file the installer had to modify is saved as `*.cw-backup`.
 
-> **Important — `cw` must be resolvable.** Workflow skills run bare `cw …`
+> **Important — `cw` must be resolvable.** The gated path runs bare `cw …`
 > commands in a shell. If `cw` is not on `PATH` inside Claude Code, the
 > engineering work still happens but nothing is recorded and the monitor stays
 > empty. The simplest fix is a global install:
@@ -144,47 +147,50 @@ Then open:
 Options: `--port <n>`, `--host <h>`, `--project <dir>`, `--runtime <dir>`.
 The port defaults to `monitorPort` in `.ai-workflow/config.json` (4173).
 
-### Step 4 — Bootstrap conventions (optional once per repository)
+### Step 4 — Record repository knowledge (optional, when it earns its place)
 
 Inside Claude Code:
 
 ```
-/refresh-conventions
+/map-repo database
 ```
 
-This reads representative code and writes `code.md`, `comments.md`,
-`testing.md`, `database.md` and `metadata.json` into
-`.ai-workflow/conventions/`.
+This reads representative code and writes
+`.claude/instructions/database.instructions.md` with the paths, conventions and
+gotchas of that area, plus a freshness record `cw instructions status` can
+verify.
 
-Do this **once per repository when a shared cache is useful**. It is not a
-prerequisite for L0-L1 work. Later tasks reuse valid areas and refresh only the
-relevant guidance that is absent, invalid, or materially stale.
+Do this for an area whose answer is repeated, invisible from a single file, and
+costly to get wrong. It is not a prerequisite for anything: a task that can
+learn the pattern from the neighboring file should do that instead.
 
 ### Step 5 — Run your first task
 
-Inside Claude Code:
+Just ask, in Claude Code. There is no entry command:
 
 ```
-/work
 Cho phép chỉnh sửa Liên lạc tạo độc lập.
 Liên lạc gắn dòng báo cáo giữ nguyên.
 ```
 
-This bounded multi-layer change normally classifies as L2:
+This bounded multi-layer change runs natively — inspect, change, targeted
+verification, report:
 
 ```
 Prompt
   ↓
-Targeted Impact            direct and necessary downstream boundaries only
-  ↓                         (may briefly wait on one material decision)
-Implementation
+Inspect                    the entry point, the rule, the nearest test
+  ↓                         (a shared consumer here loads impact-analysis)
+Change
   ↓
-Risk-based Validation      targeted → integration/manual only when justified
+Targeted verification      the nearest test; integration only at a real boundary
   ↓
-Done
+Changed / Why / Verified / Not verified / Risk
 ```
 
-Watch it move in the monitor. You can stop reading here and use the product.
+Nothing is classified, nothing is written to disk, and no phase is announced.
+Watch the runtime activity in the monitor. You can stop reading here and use the
+product.
 
 ---
 
@@ -212,7 +218,7 @@ Server-Sent Events (≈1s polling on the server side, plus a local 1s clock so
 │   current  │     ↓                            │ status  WAITING USER      │
 │   fc-…-001 │   Evidence Analysis  ✓           │ gate    BUSINESS_READY =  │
 │   4s ago   │     ↓                            │         WAITING           │
-│            │   Business Decision  ◐  ← current│ skill   wf-business-…     │
+│            │   Decision           ◐  ← current│ skill   deep-change       │
 │ ▸ COMPLETED│     ↓ blocked                    │ artifacts                 │
 │   fc-…-002 │   Waiting For User               │  · business-decision.md   │
 │            │     …                            │ Activity (events)         │
@@ -318,15 +324,15 @@ second, so it holds work in progress, and everything older is answered from
 
 ## 3. Test the monitor in 5 minutes
 
-Use a deliberately ambiguous L3 request (authorization + existing-data impact),
-so the full business gate has to stop and ask.
+Use a deliberately irreversible request with a genuine open decision
+(authorization + existing production data), so the gate has to stop and ask.
 
 **1. Start the monitor** and open http://127.0.0.1:4173.
 
 **2. In Claude Code, send:**
 
 ```
-/feature-change
+/deep-change
 Thay đổi authorization chỉnh sửa Liên lạc cho MNG/owner và áp dụng cho dữ liệu
 legacy. Chưa quyết định MNG được sửa loại Liên lạc nào.
 ```
@@ -335,15 +341,15 @@ legacy. Chưa quyết định MNG được sửa loại Liên lạc nào.
 
 | Monitor shows | Meaning |
 | --- | --- |
-| A new run appears, `RUNNING`, chip `current` | `cw run start feature-change` |
-| `Evidence Analysis` turns `●`, artifact `evidence.md` appears | Evidence is being reconciled |
-| `Business Decision` turns `●`, gate chip `BUSINESS_READY` | The gate phase is running |
-| `Waiting For User` turns `◐`, header pill `WAITING USER`, gate `BUSINESS_READY = WAITING` | Claude found an ambiguity and parked the run |
+| A new run appears, `RUNNING`, chip `current` | `cw run start deep-change` |
+| `Investigate` turns `●` | The blast radius is being established; no file may change |
+| `Decision` turns `●`, gate chip `DECISION_READY` | The gate phase is running |
+| `Waiting For User` turns `◐`, header pill `WAITING USER`, gate `DECISION_READY = WAITING` | A real product choice remains and the run parked |
 | Claude runtime goes `IDLE` | It is waiting on you, not working |
 
-At this point Claude asks you one concise question (Problem / Impact /
-Recommended resolution / Decision required). Meanwhile any attempt to edit code
-would be denied by the hook — the gate is open.
+At this point Claude asks you one question in one screen — what it found, what
+must be decided, what it recommends, the alternatives, and what is at risk
+either way. Meanwhile any attempt to edit code is denied by the hook.
 
 **4. Answer it in the same session:**
 
@@ -356,101 +362,125 @@ Cho sửa nội dung và Tag.
 
 | Monitor shows | Meaning |
 | --- | --- |
-| `Waiting For User` → `✓`, back on `Business Decision` | The same run resumed — no new run appears |
-| `business-decision.md` listed on the node | Resolved specification persisted |
-| Gate chip flips to `BUSINESS_READY = PASSED` | `cw gate pass BUSINESS_READY` |
-| `Impact / Risk / Scope` turns `●`, then three artifacts appear | Plan, impact/risk/scope, test strategy |
-| `Implementation` turns `●` | Only now can files change |
-| `Validation` → optional `E2E` → `Independent Review` | Risk-based evidence, then review (`review.md`) |
-| `Product Assessment` → `Final Report` → `Done`, run `COMPLETED` | Verified completion |
+| `Waiting For User` → `✓`, back on `Decision` | The same run resumed — no new run appears |
+| `decision.md` listed on the node | The recorded decision, including your answer |
+| Gate chip flips to `DECISION_READY = PASSED` | `cw gate pass DECISION_READY` |
+| `Implement` turns `●` | Only now can files change |
+| `Verify` → `Adversarial Review` | Evidence, then a review that reads the diff (`review.md`) |
+| `Done`, run `COMPLETED` | Verified completion |
 
 > **Tip.** The run list is the fastest correctness check for the whole kit: one
-> prompt must produce **one** run. If answering a question creates a second run,
+> task must produce **one** run. If answering a question creates a second run,
 > something re-entered the workflow instead of resuming it.
+
+> **Note.** This is the exceptional path. An ordinary task opens no gate, asks
+> nothing, and shows up in the monitor as a `generic` run with live tool
+> activity — which is exactly the point of the redesign.
 
 ---
 
 ## 4. Core concepts
 
-**Workflow** — an ordered development process, defined as data (YAML): nodes,
-edges, gates, and the artifacts each phase must produce. Shipped:
-`solution-analysis`, `feature-change`, `bug-fix`, `standard-change`, `quick-fix`,
-`generic`.
+**Capability (skill)** — an instruction file holding a method the model would
+otherwise be missing (`.claude/skills/<name>/SKILL.md`). It loads when the task
+turns out to need it, and can also be typed as a slash command. It is never a
+workflow phase, and never a task category.
 
-**Skill** — a reusable instruction file Claude loads (`.claude/skills/<name>/SKILL.md`).
-Entry-point skills are what you type (`/feature-change`); `wf-*` skills are steps
-invoked by a workflow, not by you.
+**Scoped instructions** — how *this* repository does one area, in
+`.claude/instructions/<area>.instructions.md`, with `appliesTo` globs and the
+evidence files it was derived from. Only the file covering the area being
+touched is read. Written by `/map-repo`. See [§11](#11-repository-instructions).
 
-**Agent** — a specialised sub-worker with its own tools and read-only discipline:
-`business-analyst` (evidence reconciliation), `root-cause-analyst` (causal
-tracing), `independent-reviewer` (post-implementation review).
+**Output contract (prompt)** — how to present a document, in
+`.claude/prompts/<name>.prompt.md`. Read only when the user asked for one, which
+is why reporting structure costs nothing on an ordinary task.
 
-**Gate** — a named condition that must be `PASSED` before the workflow may
-continue. `BUSINESS_READY` and `ROOT_CAUSE_READY` are the two shipped gates.
-While any gate is open, the `PreToolUse` hook denies repository changes.
+**Agent** — a sub-worker with its own tools and an independent source of truth.
+One ships: `adversarial-reviewer`, used inside `deep-change`. A subagent that
+re-reads the code the main agent just read is latency, not review.
 
-**Artifact** — a file a phase must persist into the run directory. It is the
-phase's evidence and the next phase's input: `evidence.md`, `root-cause.md`,
-`business-decision.md`, `implementation-plan.md`, `impact-risk-scope.md`,
-`test-strategy.md`, `validation.md`, `review.md`, `assessment.md`,
-`final-report.md`.
+**Workflow** — an ordered process, defined as data (YAML): nodes, edges, gates,
+and the artifacts each phase must produce. The preset uses `deep-change` and
+`generic`; `solution-analysis`, `feature-change`, `bug-fix`, `standard-change`
+and `quick-fix` remain shipped for projects that opt into them.
+
+**Gate** — a named condition that must be `PASSED` before a workflow may
+continue. `DECISION_READY` is the preset's only gate; `BUSINESS_READY` and
+`ROOT_CAUSE_READY` belong to the legacy topologies. While any gate is open, the
+`PreToolUse` hook denies repository changes.
+
+**Artifact** — a file a phase must persist into the run directory. `deep-change`
+declares two: `decision.md` and `review.md`. Ordinary work declares none,
+because nothing later reads them.
 
 **Run** — one instance of one workflow for one task, stored in
-`.ai-workflow/runs/<run-id>/`. Run ids look like `fc-20260803-001` (workflow
-initials, date, per-day counter).
+`.ai-workflow/runs/<run-id>/`. Run ids look like `dc-20260831-001` (workflow
+initials, date, per-day counter). A prompt that belongs to no workflow gets a
+`generic` run so the monitor still shows live activity.
 
 **Semantic state** — which workflow phase the run is in, and what its gates say.
-Written only by skills, through `cw`.
+Written only through `cw`.
 
 **Runtime state** — what Claude is doing right now (`ACTIVE`, `TOOL_RUNNING`,
-`SUBAGENT_RUNNING`, `IDLE`, …). Written only by Claude Code hooks.
+`SUBAGENT_RUNNING`, `IDLE`, …). Written only by Claude Code hooks, automatically.
 
-**Convention cache** — persisted knowledge of how this repository writes code,
-comments, tests and database changes, in `.ai-workflow/conventions/`, so it is
-discovered once rather than re-derived per task.
-
-**Mission** — the Tech Lead layer over a run: its classification (task type,
-complexity, risk, workflow class), plan, evidence status, confidence per
-dimension, risks, decisions, task breakdown, deliverables and checkpoints. Stored
-inside the run's `state.json`, written only through `cw mission …`. See
+**Mission** — the classification layer over a run (task type, complexity, risk,
+plan, confidence, checkpoints), written through `cw mission …`. It is runtime
+functionality the preset no longer drives on every task; see
 [§22](#22-mission-control).
 
-**Checkpoint** — a state the mission stops in because only the user may decide.
-Unlike a gate, it is not tied to the topology, so it works on `quick-fix` and
-`standard-change` too; while one is pending, repository writes are denied.
-
-**Mission Board** — the organised view of all of that (`cw board`, or the right
-panel in the monitor), including the buttons that approve, reject, pause, resume
-or cancel.
+**Mission Board** — the organised view of a run's state (`cw board`, or the
+right panel in the monitor), including the buttons that approve, reject, pause,
+resume or cancel.
 
 ---
 
 ## 5. Core rules
 
-### Classify first; pay only for the risk
+### Depth follows evidence, not the task's name
 
-Every engineering task is classified before execution:
+There is no classification step. Every task starts the same way — inspect,
+change, verify what the change touched — and depth is added only when reading
+the code justifies it. Three facts decide, and none of them is the word the
+request used:
 
-| Level | Meaning | Path |
+| Dimension | Low | High |
 | --- | --- | --- |
-| L0 | trivial/mechanical local change | understand → change → minimal verify |
-| L1 | bounded small fix | root cause when needed → fix → targeted verify |
-| L2 | bounded multi-file or multi-layer change | targeted impact → implement → proportional verify |
-| L3 | migration/data/auth/security/payment/concurrency/cross-service/critical compatibility or broad flow | full controlled workflow |
+| Change surface | one file or one call path | several modules, layers, or consumers |
+| Uncertainty | expected behavior and location are clear | cause or required behavior genuinely unclear |
+| Blast radius | local and reversible | data, contracts, auth, money, migrations, production |
 
-The level can rise when investigation finds concrete hidden risk. Evidence is
-carried forward and completed analysis is not repeated. Report depth is
-independent: an L1 task may need a detailed report, while an L3 status answer may
-stay short.
+All three low: change it. One high: investigate that dimension only. Blast
+radius high *and* hard to reverse: `deep-change`.
 
-### L3 only: NO BUSINESS DECISION = NO CODING
+Wide is not the same as risky. A rename across forty files is wide and
+reversible, so it stays an ordinary task.
 
-In a full L3 run, the desired behaviour must be explicit enough to answer:
-actor/permission, trigger/precondition, state or data transition, forbidden
-behaviour, important edge cases, and backward-compatibility expectations.
+### Capabilities load on evidence
 
-**How this is enforced.** While any active run in the project has an unpassed
-gate, the `PreToolUse` hook returns `deny` for:
+While inspecting, when one of the escalation triggers in `CLAUDE.md` turns out
+to be true — an invisible cause, a shared consumer, a schema change, a contract
+change, an unmeasured slowdown — the matching skill loads and the work
+continues. Loading one is not a mode switch and does not restart the task. For
+most tasks nothing fires, which is the expected outcome.
+
+### Stop rules
+
+Investigation stops when the target is identified, the expected behavior is
+decided, the impact actually found is understood, and the check that will prove
+the change is known. "More confidence" is not a reason to keep reading.
+
+### Artifacts are the exception
+
+Default: none. The code, the tests, and the final response are the deliverable.
+A persistent file is written when it has value after the task — an architecture
+decision, a migration plan, a formal audit, a handover — or because the user
+asked for a document. `deep-change` writes exactly one decision file.
+
+### One gate: NO DECISION = NO CODING, for irreversible work
+
+`deep-change` opens a run whose single gate, `DECISION_READY`, is enforced by
+the `PreToolUse` hook. While it is open the hook returns `deny` for:
 
 - every file-writing tool — `Edit`, `Write`, `MultiEdit`, `NotebookEdit`,
   `apply_patch`, `str_replace_editor`, `create_file`, plus MCP tools whose names
@@ -462,14 +492,14 @@ gate, the `PreToolUse` hook returns `deny` for:
   command substitution, and write-capable flags (`find -delete`, `fd -x`,
   `sort -o`) are refused.
 
-The real denial message Claude receives:
+The denial message Claude receives:
 
 ```
-Blocked by claude-workflow-kit: run fc-20260803-001 (feature-change) has unpassed
-gate(s): BUSINESS_READY (decided at "business"). Nothing in the repository may
-change until BUSINESS_READY pass. Complete the gate phase, persist its evidence
-artifact, then run: cw gate pass BUSINESS_READY. If the decision is not yours to
-make, run: cw gate wait BUSINESS_READY --message "<open decision>" and ask the
+Blocked by claude-workflow-kit: run dc-20260831-001 (deep-change) has unpassed
+gate(s): DECISION_READY (decided at "decide"). Nothing in the repository may
+change until DECISION_READY pass. Complete the gate phase, persist its evidence
+artifact, then run: cw gate pass DECISION_READY. If the decision is not yours to
+make, run: cw gate wait DECISION_READY --message "<open decision>" and ask the
 user. This write was refused because src/orders.js is repository content.
 ```
 
@@ -478,13 +508,9 @@ artifact the **current** phase declares. The phase that produces a gate's
 evidence cannot be blocked by that gate. `state.json` and `events.jsonl` are
 never writable by a tool.
 
-### L3 bugs: NO ROOT CAUSE = NO FIX
-
-The full L3 `bug-fix` workflow adds `ROOT_CAUSE_READY` in front of everything else.
-Reproduce where feasible, trace the current/legacy flow, explain *why* the
-symptom occurs, and separate symptom / contributing factor / root cause. Both
-gates must pass before an L3 defect fix can touch a file. L1 and L2 defects still
-need a causal explanation, without full gate artifacts unless risk escalates.
+The legacy topologies (`feature-change`, `bug-fix`) still define
+`BUSINESS_READY` and `ROOT_CAUSE_READY` and are enforced identically for
+projects that start those runs; the preset no longer routes to them.
 
 > **Limitation — this is a workflow guardrail, not a security sandbox.**
 > Enforcement covers the tool surface listed in `config.json`. Test and build
@@ -494,742 +520,296 @@ need a causal explanation, without full gate artifacts unless risk escalates.
 > whose name does not match the pattern, is not covered until you add it. See
 > [§15](#15-gate-enforcement-and-limitations).
 
+### Ask only for a real decision
+
+A question reaches the user when at least two materially different behaviors are
+plausible, evidence cannot select between them, and the choice changes business
+data, permissions, money, state, or a public contract. Otherwise the assumption
+is stated in one line and the work continues. Alternatives are never invented to
+justify a checkpoint, and silence is never approval.
+
 ### Evidence, not authority
 
 Requirement documents, database schema, existing code and existing tests are all
 **evidence**. None is truth on its own. When they conflict, the contradiction is
-surfaced with a stable id (`C-001`, `C-002`, …) and the intended behaviour is
-resolved explicitly — never by silently preferring documents over code or code
-over documents.
+surfaced and the intended behavior is resolved explicitly — never by silently
+preferring documents over code or code over documents.
 
-Conclusions are classified `FACT` / `INFERENCE` / `ASSUMPTION` / `PROPOSAL`.
+### Verification is proportional
+
+Cheapest sufficient evidence, in order: nearest unit test → affected service or
+API test → typecheck/lint/build of the affected package → integration test for a
+real boundary → E2E only when it closes a risk nothing cheaper can. The full
+suite is not run to make a report look complete, and claims stay distinct:
+implemented is not verified, build passed is not functionally tested.
 
 ### Scope discipline
 
-Only approved scope is implemented. Improvements discovered while coding go into
-`assessment.md` as recommendations, not into the diff — unless they are required
-for correctness or safety of the approved task.
+Only what was asked is implemented. Unrelated technical debt is one line in the
+report, never a change in the diff.
 
 ---
 
-## 6. Workflow guide
+## 6. Working guide
 
-Classify the task before choosing depth. A one-line UI fix does not need a full
-workflow; a bounded FE+BE change still does not automatically need L3 gates.
+### The ordinary path
 
-Mission Control does this classification for you and prints what it decided —
-`cw mission route --type … --complexity …` shows the same answer without touching
-a run. The class names below map onto these topologies: Lightning and Fast →
-`quick-fix`, Standard → `standard-change`, Deep → `bug-fix`/`feature-change`,
-Research → `solution-analysis`. See [§22](#22-mission-control).
-
-| Workflow | Phases | Gates | Typical cost |
-| --- | --- | --- | --- |
-| `/quick-fix` / L0-L1 | triage → fix → validate | none | minutes |
-| `/solution-analysis` | intake → business/source/impact/options/plan → approval stop | `ANALYSIS_APPROVED` | analysis session; no code |
-| `standard-change` / L2 | targeted impact → implementation → validation | none | bounded session |
-| full `bug-fix` / L3 | 10 phases, E2E conditional | `ROOT_CAUSE_READY`, `BUSINESS_READY` | full session |
-| full `feature-change` / L3 | 10 phases, E2E conditional | `BUSINESS_READY` | full session |
-
-### `/solution-analysis`
-
-Use this when the deliverable is business analysis, source-aligned impact,
-solution comparison, and a plan—not implementation yet. Paste free-form text;
-the skill parses goal, behavior, scope, constraints, acceptance criteria, open
-questions, and assumptions. It reads the current source and convention cache,
-creates seven required artifacts, then stops at `ANALYSIS_READY`.
-
-After explicit approval, `cw analysis handoff` creates a trace-linked
-`feature-change`. A hash check of relevant source files must be `VALID` before
-`BUSINESS_READY` opens. Material changes produce `STALE`, block implementation,
-and require only the affected analysis sections to be refreshed.
-
-#### A delivered design document as source of truth
-
-When the input is a detailed design document (TKCT, BRD, spec) rather than a
-chat message, put the file in the repository first — a path outside the project
-cannot be fingerprinted — and run `/solution-analysis` on it. Alongside the usual
-artifacts the run produces `spec-map.md`, one row per verifiable requirement:
+Most work needs nothing typed and nothing loaded:
 
 ```text
-| ID       | Requirement                  | Design Ref            | Code Paths         |
-| -------- | ---------------------------- | --------------------- | ------------------ |
-| SPEC-001 | Orders above 10M get 5% off  | docs/design/x.md#4.2  | src/order/price.ts |
-| SPEC-002 | Round the total down to 1000 | docs/design/x.md#4.3  | src/order/price.ts |
+inspect -> understand -> change -> targeted verification -> report
 ```
 
-Every design document the map cites is hashed by `cw analysis ready`, whether or
-not `--source` listed it. From then on the design document is treated exactly
-like source: edit it and the linked feature run reports `STALE`, `BUSINESS_READY`
-reopens, and the affected rows must be re-checked before implementation resumes.
+The final response is `Changed / Why / Verified / Not verified / Risk`. No run is
+opened by hand; the hook records a `generic` run for the monitor on its own.
 
-Later work asks the map what it is bound by:
+### When a capability loads
 
-```bash
-cw spec check --files "src/order/price.ts"
-# 2 requirement(s) from docs/design/x.md
-#   src/order/price.ts  SPEC-001 SPEC-002
+| What you hit | What loads | What it buys |
+| --- | --- | --- |
+| a defect whose cause is not in the code you read | `root-cause-analysis` | a causal chain instead of a symptom patch |
+| a shared function, a contract, more than two consumers | `impact-analysis` | the consumers you would otherwise meet in production |
+| a feature across layers, or new business state | `feature-analysis` | flow, transactions, idempotency, AC-to-verification |
+| two queries must agree | `sql-compare` | NULL, join, grouping and pagination semantics, proven |
+| new code must match legacy behavior | `legacy-parity` | a corpus and a tolerance, agreed before comparing |
+| DDL, backfill, data reshaping | `schema-migration` | expand/contract, locking, an honest rollback |
+| a published shape or status code changes | `api-contract-review` | the breaking-change taxonomy and a compatible way to ship |
+| something is slow, nothing is measured | `performance-investigation` | a baseline, the dominant cost, a proven improvement |
+
+Any of these can also be typed as a slash command when you already know which
+one the task needs.
+
+### When the gated path is right
+
+`/deep-change` is for a change that cannot be undone by reverting code:
+production data, a destructive migration, authentication or authorization,
+money, or a contract with consumers outside the repository.
+
+```text
+investigate -> decide (gate + decision.md) -> implement -> verify -> review -> done
 ```
 
-`UNCOVERED` means no approved requirement claims that file — either the change
-is outside the approved scope, or the map is missing a row. Entering the
-implementation phase prints the same drift as `cw: spec drift — …` warnings:
-unclaimed requirements, changed design documents, unreadable rows. These warn and
-never block. The map is written by the same model whose work it describes, so the
-hard gate stays on the source fingerprint, where the evidence is independent.
+It holds every edit until the decision is recorded, asks the user only when a
+genuine product or risk choice remains, and ends with an adversarial review that
+reads the diff rather than the implementer's summary.
 
-### `/quick-fix`
+### Reports
 
-**Use when** the requested outcome is already clear and the scope is L0 or L1:
-an explicit small bug fix, a visibility condition, a duplicate import, a
-z-index/layout fix, a flag that does not behave as documented.
+Ask for one and the matching contract in `.claude/prompts/` is read and
+followed — change, bug, impact, test, review, analysis, parity, migration plan,
+business summary, decision record, or release note. Ask for nothing and no
+contract is loaded at all. Audience beats document type: a bug fix explained to
+a PO uses `business-summary.prompt.md`; a mixed audience gets a business summary
+followed by technical detail.
 
-**Input example**
+Requests in Vietnamese (`báo cáo`, `tổng hợp`) are report requests, and the
+report is written in the reader's language.
 
-```
-/quick-fix
-Cho MNG hiển thị nút Tạo Action. BE hiện tại đã cho phép tạo.
-```
+### Repository knowledge
 
-```
-/quick-fix
-Chip Liên lạc đang import Communication 2 lần, sửa lại.
-```
+`/map-repo <area>` writes `.claude/instructions/<area>.instructions.md` from
+repeated evidence in the codebase, with `appliesTo` globs and the list of files
+it was derived from. Later tasks read only the file covering what they touch.
+See [§11](#11-repository-instructions).
 
-**What Claude does**
+### Runtime topologies
 
-1. Opens a run (`cw run start quick-fix`).
-2. **Triage** — inspects the direct code path only: the relevant component, its
-   nearest condition/helper, the backend authorisation *only if the request
-   depends on it*, the nearest existing test. No repository scan, no requirement
-   documents, no git history, no convention discovery. Root cause is one concise
-   conclusion, not a document.
-3. **Fix** — the smallest causal change. No unrelated refactor, no adjacent
-   fixes, no new abstraction, no new tests or docs unless directly required or
-   requested.
-4. **Validate** — focused: nearest test, cheap typecheck/build, or one runtime
-   probe. Then a lightweight diff check (intended change present, nothing
-   unrelated, validation passed). No full E2E, no reviewer agent.
-
-**Can it stop and ask?** Normally **no questions at all**. Your stated outcome is
-authoritative when it is explicit — "cho MNG được tạo Action" is a decision
-already made, not a question to re-ask. Several implementation options are not a
-reason to stop; materially multi-layer scope is a reason to escalate to L2, not
-to invent a business blocker.
-
-**Can it escalate?** Yes, but only on concrete evidence. Bounded multi-file/
-multi-layer impact or a cause outside the narrow path goes L1 → L2 and continues
-through `standard-change`. Migration/data/auth/security/payment/concurrency/
-cross-service/critical compatibility or broad flow risk goes to an L3 bug or
-feature workflow. `cw run escalate` changes topology in place: the same `runId`,
-evidence directory, owner, and event log continue, while any stricter L3 gates
-open. It carries the files, trace, and conclusions already gathered; analysis
-does not restart from zero and the prior work is not mislabeled `ABANDONED`.
-
-**Main output** — the diff plus a quick report with only applicable sections:
-
-```
-Level:      L0 or L1
-Cause / Reason: <one sentence for an L1 defect; omitted for mechanical L0>
-Changed:    <what changed>
-Verification: <what was actually run>
-Manual verify: <actions and expected results, only when needed>
-Remaining risk: <evidence-backed risk, only when present>
-```
-
-No artifacts are written by default. If you explicitly ask for a detailed
-report, the same small task uses the matching standardized template.
-
-**When not to use** — the behaviour itself is being decided, a migration is
-involved, or you cannot state the expected result in one sentence. Because
-`quick-fix` carries no gates, never use it to get past one: `cw run start` refuses
-to open it while a gated run is active, and forcing a gated run aside still
-requires a stated reason.
-
-### `standard-change` (L2 internal body)
-
-**Use when** impact is meaningful but bounded: several files, FE+BE, a local API
-contract, query, permission/state behavior, or integration within a clear
-boundary. `/work`, `/feature-change`, and `/bug-fix` route here automatically;
-there is no separate user command.
-
-**What Claude does**
-
-1. **Targeted impact** — traces only affected and necessary downstream layers;
-   establishes a causal root cause for defects and stops when evidence is enough.
-2. Waits for one concise business decision only if two material behaviors are
-   plausible and context cannot select safely. This is not a hard gate.
-3. **Implementation** — smallest maintainable change within the understood
-   boundary.
-4. **Risk-based validation** — targeted checks first, affected-package checks or
-   integration when useful, E2E only for a real remaining critical-path gap.
-
-No readiness documents, convention skill, reviewer, assessment, mandatory E2E,
-or report artifact. Manual UI verification is a valid completed outcome with
-actions and expected results.
-
-### `/feature-change`
-
-**Use when** you know the request is a feature/change. The entry skill still
-classifies it: L0-L1 → quick, L2 → standard, L3 → full controlled feature flow.
-
-**Input example**
-
-```
-/feature-change
-Cho phép chỉnh sửa Liên lạc tạo độc lập.
-Liên lạc gắn dòng báo cáo giữ nguyên.
-```
-
-**For an L3 change, Claude**
-
-1. Opens a run (`cw run start feature-change`).
-2. Reconciles evidence across intent, documents, DB, code and tests → `evidence.md`.
-3. Resolves the business behaviour behind `BUSINESS_READY` → `business-decision.md`.
-4. Plans impact, risk, scope and tests → three artifacts.
-5. Loads relevant cached conventions; refreshes only guidance that is absent,
-   invalid, or materially stale for this change.
-6. Implements the smallest correct change.
-7. Validates against the risk-based strategy; runs E2E only when it closes a
-   stated critical-path or cross-layer gap.
-8. Hands the diff to the `independent-reviewer` agent → `review.md`.
-9. Assesses the result → `assessment.md`; reports → `final-report.md`.
-
-**Can it stop and ask?** Yes — at the business gate, when a genuine product
-decision would materially change the implementation. The run parks in
-`WAITING_USER` and resumes in place when you answer.
-
-**Main output** — quick report by default or the requested detailed template,
-plus the L3 evidence chain in the run directory.
-
-The command selects change semantics, not automatic full-workflow depth.
-
-### `/bug-fix`
-
-**Use when** existing behavior is wrong. The entry skill classifies it: L0-L1 →
-quick, L2 → standard, L3 → the full controlled defect flow.
-
-**Input example**
-
-```
-/bug-fix
-Sửa Liên lạc gắn dòng báo cáo vẫn lưu được.
-Expected: chặn, báo lỗi. Actual: lưu thành công.
-```
-
-**For an L3 defect, Claude**
-
-1. Opens a run (`cw run start bug-fix`).
-2. Reproduces where feasible, traces the current/legacy flow, separates symptom
-   from contributing factors from root cause → `root-cause.md`, behind
-   `ROOT_CAUSE_READY`.
-3. Resolves the expected behaviour the fix must produce → `business-decision.md`,
-   behind `BUSINESS_READY`.
-4. Then the L3 path: readiness → conventions → implementation → validation →
-   conditional E2E → review → assessment → report.
-
-**Can it stop and ask?** Yes, twice: when the root cause cannot be established
-from available evidence, and when expected behaviour is a genuine product
-decision.
-
-**Main output** — `root-cause.md` plus a quick or requested detailed report.
-
-**When not to use** — the behaviour is not actually a defect but a requirement
-change (use `/feature-change`).
-
-### `/work`
-
-**Use when** you have a task and do not want to pick a workflow.
-
-**Input example**
-
-```
-/work
-Người dùng không xoá được Liên lạc đã gắn báo cáo — không rõ là bug hay thiếu tính năng.
-```
-
-**What Claude does** — routes analysis-only requests to `wf-solution-analysis`;
-otherwise classifies L0-L3 from evidence, not keywords, then invokes
-exactly one body: `wf-quick-fix`, `wf-standard-change`, or the appropriate L3
-`wf-bug-fix`/`wf-feature-change`. It does not broadly audit before choosing a
-cheap path. A report-only request goes straight to `wf-final-report` and opens no
-engineering run.
-
-**Can it stop and ask?** Only if the classification itself changes what inputs
-are required and cannot be resolved from the task.
-
-**Main output** — whatever the selected workflow produces.
-
-**When not to use** — you already know which workflow you want.
-
-### `/refresh-conventions`
-
-**Use when** setting up the repository, or when `cw conventions status` reports
-areas as `MISSING`, `STALE`, `UNRECORDED` or `INVALID`.
-
-**Input example**
-
-```
-/refresh-conventions            # all areas
-/refresh-conventions testing    # one area
-```
-
-**What Claude does** — derives conventions from repeated codebase evidence,
-marks each rule `REQUIRED` / `DOMINANT` / `LOCAL` / `UNCERTAIN`, and writes
-`code.md`, `comments.md`, `testing.md`, `database.md` and `metadata.json` under
-`.ai-workflow/conventions/`. `metadata.json` records, per area, the `status`,
-`last_refresh` and the project-relative `evidence` files actually read.
-
-**Can it stop and ask?** No.
-
-**Main output** — the convention cache. It does not modify product code.
-
-**When not to use** — on every task. That is the whole point of the cache.
-
-### `/wf-status`
-
-**Use when** resuming work, or when you are unsure whether a run is still open.
-
-**Input example**
-
-```
-/wf-status
-```
-
-**What Claude does** — runs `cw status` and interprets it: the current phase,
-open gates, whether mutation is currently denied, missing or unusable artifacts,
-gate overrides, policy health, and the transitions the state machine will accept
-next.
-
-**Can it stop and ask?** No. It is a read-only report.
-
-**When not to use** — nothing to check; it is always safe.
-
-### Quick and detailed reporting
-
-Execution level and report depth are independent. Completion uses a quick report
-unless you explicitly ask for a report, document, handover, release note,
-review/impact/test report, BRD/TKCB comparison, or an audience-specific
-deliverable. Detailed mode reuses one of the nine files in
-`.ai-workflow/templates/` and preserves its heading order, terminology, status
-vocabulary, and tables.
-
-Existing project templates are never overwritten by `update`; deleted defaults
-are restored. Reports distinguish Automated / Manual / Not Verified and use
-`Not applicable` or `Unknown from current scope` rather than inventing content.
+The `cw` runtime still defines `quick-fix`, `standard-change`, `feature-change`,
+`bug-fix` and `solution-analysis`. They are available to projects that want a
+recorded multi-phase run — `cw run start <id>` — and they are what
+`cw mission route` still classifies into. The `senior-dev` preset routes to none
+of them: it uses `deep-change` for irreversible work and native execution for
+everything else.
 
 ---
 
-## 7. Phase by phase
+## 7. The gated path, phase by phase
 
-### `feature-change` (14 nodes, L3 only; freshness is handoff-only)
+### `deep-change` (8 nodes, one gate)
 
 ```
-                  prompt  (start)
+        prompt  (start)
+           │
+           ▼
+      investigate
+           │
+           ▼
+ ┌───── decide  ── decision.md            gate DECISION_READY
+ │  !DECISION_READY │  DECISION_READY
+ ▼                  │
+await-decision ─────┘  (answered)
+   (waiting)         │
+                     ▼
+                 implement
                      │
                      ▼
-              evidence  ── evidence.md
-                     │
+                  verify ──────┐ failure
+                     │   ◄─────┘
                      ▼
-     ┌────────  business  ── business-decision.md      gate BUSINESS_READY
-     │ !BUSINESS_READY │  BUSINESS_READY
-     ▼                 │
-await-business  ───────┘  (answered)
-   (waiting)            │
-                        ▼
-                  readiness  ── implementation-plan.md
-                        │        impact-risk-scope.md
-                        │        test-strategy.md
-                        ▼
-                  conventions
-                        │
-                        ▼
-              implementation ◄──────────┐
-                        │               │ findings
-                        ▼               │
-                  validation  ── validation.md
-                    │     │             │
-       E2E justified│     └────────────►│ E2E not justified
-                    ▼                   │
-                   e2e                  │
-                    │                   │
-                    ▼                   │
-                  review  ── review.md──┘   (agent: independent-reviewer)
-                        │
-                        ▼
-                 assessment  ── assessment.md
-                        │
-                        ▼
-                    report  ── final-report.md
-                        │
-                        ▼
-                     done  (end)
+                  review  ── review.md ──┐ findings
+                     │            ◄──────┘
+                     ▼
+                   done  (end)
 ```
 
-### `quick-fix` (5 nodes)
+#### Investigate
 
-No gates, no waiting nodes, no declared artifacts — which is exactly why it is
-cheap, and why escalation rather than gate-bypass is the safety mechanism.
+- **Purpose** — establish only what the decision needs: what cannot be undone
+  and what recovery costs, who depends on the current behavior, which part is a
+  product choice, the deploy order, how it will be verified.
+- **Uses** — whichever capability fits: `root-cause-analysis`,
+  `impact-analysis`, `schema-migration`, `api-contract-review`, `legacy-parity`.
+- **Writes nothing.** Every edit is denied here — that is the gate working.
 
-```
-prompt  (start)
-   │
-   ▼
-triage      ← direct code path only; escalates out if the narrow path breaks
-   │
-   ▼
- fix  ◄──────────┐  focused failure
-   │             │
-   ▼             │
-validate ────────┘
-   │
-   ▼
- done  (end)
-```
+#### Decide (`DECISION_READY`)
 
-### `standard-change` (6 nodes, L2)
+- **Produces** — `decision.md`: what is changing and why, what is irreversible
+  and what recovery costs, impact, options actually considered, the chosen
+  approach, the deploy order, the verification plan, and the open question if
+  one remains.
+- **Passes the gate** when evidence settles the decision. Manufacturing a
+  question to open a checkpoint is explicitly forbidden.
+- **Waits** (`cw gate wait DECISION_READY`) when a real product or risk choice
+  needs the user, who is asked in one screen and notified with
+  `PushNotification`.
 
-No gates or required artifacts. It can park briefly on an advisory clarification
-without turning every medium change into a hard-gated run.
+#### Implement
 
-```text
-prompt → impact ─────────────→ implementation → validation → done
-           │                        ▲              │
-           ▼                        └──────────────┘ task-caused failure
-     await-decision
-           │ answered
-           └────────→ impact
-```
+- **Purpose** — the smallest change that carries out the recorded decision,
+  inside the approved scope. A finding that widens scope returns to `decide`.
+- For a migration, the destructive step is usually a later release; the
+  implementation stops at the boundary the decision named.
 
-### `bug-fix` (14 nodes, L3 only)
+#### Verify
 
-Identical, except the run starts with a root-cause gate:
+- **Purpose** — evidence biased toward the failure mode this change creates: the
+  migration verification queries, the old-shape contract test, the permission
+  negative case, the parity corpus.
+- Records what ran, what passed, and what is still unverified.
 
-```
-prompt → root-cause ── root-cause.md      gate ROOT_CAUSE_READY
-             │  ↕ await-root-cause (waiting)
-             ▼
-         business ── business-decision.md  gate BUSINESS_READY
-             │  ↕ await-business (waiting)
-             ▼
-         readiness → conventions → implementation → validation
-             → [e2e when justified] → review → assessment → report → done
-```
+#### Review
 
-### The phases
+- **Agent** — `adversarial-reviewer`, given pointers only (`cw review-context`
+  output plus the diff command), never a summary of the work. Produces
+  `review.md` with `PASS`/`FAIL`, a readiness verdict, and P0–P3 findings.
+  Maximum three fix loops.
 
-#### Root Cause (`root-cause`, bug-fix only)
+#### Waiting node (`await-decision`)
 
-- **Purpose** — reproduce, trace the current/legacy flow end to end, explain why
-  the symptom occurs, separate symptom / contributing factors / root cause, and
-  identify whether existing tests encode the buggy behaviour.
-- **Reads** — the reported symptom, reproduction steps, code, data, logs.
-- **Produces** — `root-cause.md`. **Gate:** `ROOT_CAUSE_READY`.
-- **Can modify application code?** No.
-- **Can ask the user?** Yes — when the cause cannot be established from
-  available evidence (`cw gate wait ROOT_CAUSE_READY`).
-- **Skill / agent** — `wf-bug-root-cause`, may delegate to `root-cause-analyst`.
-
-#### Evidence Analysis (`evidence`, feature-change only)
-
-- **Purpose** — reconcile intent, requirement/design documents, DB schema, code
-  and tests; surface only contradictions that materially affect behaviour, data,
-  permissions, compatibility or implementation direction.
-- **Reads** — the user's stated outcome and all supplied sources.
-- **Produces** — `evidence.md`: desired outcome, current behaviour with evidence,
-  documented behaviour by source, contradictions `C-001…`, classification
-  (FACT / INFERENCE / ASSUMPTION / PROPOSAL), resolution options, recommendation,
-  open business decisions.
-- **Can modify application code?** No.
-- **Can ask the user?** Normally no — it collects the open questions for the next
-  phase to decide.
-- **Skill / agent** — `wf-evidence-reconciliation`, may delegate to
-  `business-analyst`.
-
-#### Business Decision (`business`)
-
-- **Purpose** — turn evidence into an explicit resolved specification: who, when,
-  what, state/data transition, forbidden behaviour, edge cases, ownership,
-  compatibility, failure behaviour.
-- **Reads** — `evidence.md` (or `root-cause.md`), the user's request, current code
-  behaviour, contradictions, open questions.
-- **Produces** — `business-decision.md`. **Gate:** `BUSINESS_READY`.
-- **Can modify application code?** No — and the hook enforces it.
-- **Can ask the user?** Yes. One concise decision at a time:
-  Problem / Impact / Recommended resolution / Decision required.
-- **Skill** — `wf-business-decision`.
-
-#### Impact / Risk / Scope (`readiness`)
-
-- **Purpose** — one coherent pre-code package: implementation plan, direct and
-  indirect impact, risk analysis, explicit in/out of scope, and a test strategy
-  derived from business rules *before* coding.
-- **Reads** — `business-decision.md`, the codebase.
-- **Produces** — `implementation-plan.md`, `impact-risk-scope.md`,
-  `test-strategy.md`. All three are enforced: the phase cannot be left while one
-  is missing or empty.
-- **Can modify application code?** No.
-- **Can ask the user?** Normally no.
-- **Skill** — `wf-change-readiness`.
-
-#### Conventions (`conventions`)
-
-- **Purpose** — load the cached repository conventions relevant to the change and
-  refresh only what is missing, stale or locally contradicted.
-- **Reads** — `cw conventions status`, then `.ai-workflow/conventions/*`.
-- **Produces** — no run artifact; may update the convention cache.
-- **Can modify application code?** No.
-- **Skill** — `wf-convention-manager`.
-
-#### Implementation (`implementation`)
-
-- **Purpose** — the smallest correct change inside approved scope, following the
-  resolved decision (and, for bugs, addressing the cause, not the symptom).
-- **Reads** — `business-decision.md`, `root-cause.md`, the three readiness
-  artifacts, conventions.
-- **Produces** — the diff; tests that belong with the change.
-- **Can modify application code?** **Yes — this is the first phase that can**,
-  and only because the gates have passed.
-- **Skill** — `wf-implement`.
-
-#### Validation (`validation`)
-
-- **Purpose** — execute the pre-defined test strategy and map evidence to each
-  business rule. Never PASS because the code "looks correct".
-- **Produces** — `validation.md` with the actual commands and their actual output.
-  The reviewer reads this file directly.
-- **Can modify application code?** Only to fix failures caused by this change,
-  within approved scope.
-- **Skill** — `wf-validation-e2e`.
-
-#### E2E (`e2e`)
-
-- **Purpose** — runtime/end-to-end verification only when a stated critical
-  journey or remaining cross-layer coverage gap justifies it. Otherwise the
-  phase is explicitly skipped with the reason.
-- **Produces** — no separate artifact; evidence is recorded in `validation.md`.
-- **Skill** — `wf-validation-e2e`.
-
-#### Independent Review (`review`)
-
-- **Purpose** — an independent read-only review of the final diff against the
-  resolved specification, root cause, approved scope, predicted impact, test
-  strategy and validation evidence.
-- **Reads** — only *pointers*, produced by `cw review-context`: the run directory,
-  resolved artifact paths, and how to obtain the diff. Never the implementer's
-  own summary — reviewing a summary is not review.
-- **Produces** — `review.md`: `PASS`/`FAIL` plus findings with
-  Severity / Evidence / Problem / Impact / Recommended correction.
-- **Can modify application code?** No. Fixes go back through `implementation`
-  (a legal edge), maximum 3 loops.
-- **Agent** — `independent-reviewer`.
-
-#### Product Assessment (`assessment`)
-
-- **Purpose** — evidence-backed observations revealed by this scope: product
-  consistency, UX, data, maintainability, security/permissions, auditability,
-  scaling. Report-only.
-- **Produces** — `assessment.md`, each item with ID / Observation / Evidence /
-  Impact / Recommendation / Priority / Scope. `No material follow-up
-  recommendations.` is a valid result.
-- **Can modify application code?** No. Only Critical/High correctness or safety
-  issues may reopen the current task.
-- **Skill** — `wf-product-assessment`.
-
-#### Final Report (`report`)
-
-- **Purpose** — a quick report by default; when the user requested a detailed
-  document, reuse the matching template and audience without changing execution
-  depth.
-- **Produces** — `final-report.md`.
-- **Skill** — `wf-final-report`.
-
-#### Waiting nodes (`await-business`, `await-root-cause`)
-
-Not work — a place the run *parks* while a gate is `WAITING`. A gate can only be
-parked from the phase that owns it, and can only be decided from that phase or
+Not work — a place the run *parks* while the gate is `WAITING`. A gate can only
+be parked from the phase that owns it, and can only be decided from that phase or
 from the waiting node the run legitimately reached. Passing the gate settles the
 waiting node and returns focus to the owning phase, so the run continues instead
 of restarting.
 
----
+### Legacy topologies
 
-## 8. Skills reference
-
-24 skills ship in the `senior-dev` preset. "User can call?" reflects the actual
-frontmatter: entry points are marked `disable-model-invocation: true` (you type
-them, the model cannot invoke them), `wf-*` step skills are marked
-`user-invocable: false` (the reverse).
-
-| Skill | User can call? | Purpose | Called by | Main output |
-| --- | :---: | --- | --- | --- |
-| `work` | ✅ | Mission Control router: classify type/complexity/risk, publish the Mission Header, route one body | you | invokes one matching body |
-| `solution-analysis` | ✅ | Free-form analysis, or a delivered detailed design document | you | seven artifacts + `ANALYSIS_READY` |
-| `quick-fix` | ✅ | Entry point for the short workflow | you | invokes `wf-quick-fix` |
-| `feature-change` | ✅ | Risk-adaptive feature/change entry | you | quick / standard / full feature body |
-| `bug-fix` | ✅ | Risk-adaptive defect entry | you | quick / standard / full bug body |
-| `refresh-conventions` | ✅ | Bootstrap/refresh the convention cache | you | `conventions/*.md` + `metadata.json` |
-| `wf-status` | ✅ | Report the current run, gates, next transitions | you | `cw status` interpretation |
-| `wf-feature-change` | ❌ | Full L3 feature body | `feature-change`, `work` | full evidence chain |
-| `wf-solution-analysis` | ❌ | Analysis-only workflow body | `solution-analysis`, `work` | seven-file handoff contract |
-| `wf-feature-from-analysis` | ❌ | Freshness + approved feature continuation | approved analysis handoff | implementation without re-analysis |
-| `wf-bug-fix` | ❌ | Full L3 defect body | `bug-fix`, `work` | full evidence chain |
-| `wf-standard-change` | ❌ | Gate-free L2 body | routed entry skills | impact → implementation → proportional validation |
-| `wf-quick-fix` | ❌ | L0-L1 body | routed entry skills | diff + quick or requested detailed report |
-| `wf-evidence-reconciliation` | ❌ | Reconcile intent/docs/DB/code/tests | `wf-feature-change` | `evidence.md` |
-| `wf-bug-root-cause` | ❌ | Reproduce, trace, establish causal root cause | `wf-bug-fix` | `root-cause.md` |
-| `wf-business-decision` | ❌ | Resolve business behaviour (hard gate) | both bodies | `business-decision.md` |
-| `wf-change-readiness` | ❌ | Plan, impact, risk, scope, test strategy | both bodies | 3 artifacts |
-| `wf-convention-manager` | ❌ | Cache-first convention reuse | both bodies | loaded conventions |
-| `wf-implement` | ❌ | Smallest correct change; review handoff contract | both bodies | the diff |
-| `wf-validation-e2e` | ❌ | Risk-based validation; optional E2E | L3 bodies | `validation.md` |
-| `wf-product-assessment` | ❌ | Post-implementation, evidence-backed findings | both bodies | `assessment.md` |
-| `wf-final-report` | ❌ | Quick/detailed report router | workflows or report-only request | template-backed report when requested |
-| `wf-mission-board` | ❌ | Keep the board honest: state, action, confidence, evidence, risk, tasks, off-track, context | every body | an accurate `cw board` |
-| `wf-checkpoint` | ❌ | Open/resolve human checkpoints; record decisions with evidence and alternatives | every body | `CHECKPOINT_*` + `DECISION_RECORDED` |
-
-### Context each step receives and produces
-
-<details>
-<summary><b>wf-evidence-reconciliation</b></summary>
-
-**Receives** — the user's stated outcome, the run directory, and the source entry
-points (documents, schema, code, tests).
-**Produces** — `evidence.md`: desired outcome, current behaviour with evidence,
-documented behaviour per source, contradictions `C-001…`, FACT/INFERENCE/
-ASSUMPTION/PROPOSAL classification, resolution options for material conflicts,
-recommended resolution, open business decisions.
-**Next phase consumes** — the contradictions and the open business decisions.
-</details>
-
-<details>
-<summary><b>wf-bug-root-cause</b></summary>
-
-**Receives** — symptom, reproduction steps, expected vs actual, the run directory.
-**Produces** — `root-cause.md`: reproduction status (`NOT_REPRODUCED` is an
-allowed, explicit outcome), the traced current/legacy flow, why the code produces
-the symptom, symptom vs contributing factors vs root cause, smallest safe fix
-direction, whether tests encode the bug.
-**Next phase consumes** — the causal claim and the fix direction.
-</details>
-
-<details>
-<summary><b>wf-business-decision</b></summary>
-
-**Receives** — the original request, evidence findings, current code behaviour,
-document/DB/test contradictions, and the open business questions.
-**Produces** — `business-decision.md`: Desired behaviour, Confirmed rules,
-Rejected/outdated interpretations, Assumptions, Open decisions, Status
-(`BUSINESS_READY` or `BUSINESS_BLOCKED`), plus the gate decision itself
-(`cw gate pass` or `cw gate wait`).
-**Next phase consumes** — `business-decision.md` is **the resolved business
-source** for everything downstream: planning, implementation, validation and
-review all read it rather than the raw documents.
-</details>
-
-<details>
-<summary><b>wf-change-readiness</b></summary>
-
-**Receives** — `business-decision.md` (and `root-cause.md` for defects), the
-codebase.
-**Produces** — `implementation-plan.md` (layers, files, data/migration, API, UI,
-permissions, compatibility, sequence), `impact-risk-scope.md` (direct/indirect
-impact, risks, in/out of scope), `test-strategy.md` (happy path, negative,
-boundary, regression, compatibility, migration, E2E).
-**Next phase consumes** — the plan and the scope boundary; validation consumes
-the test strategy verbatim.
-</details>
-
-<details>
-<summary><b>wf-convention-manager</b></summary>
-
-**Receives** — the scope of the change and the `cw conventions status` report.
-**Produces** — the loaded conventions; refreshes only flagged areas. Precedence:
-local intentional convention near the touched code → this cache → a generic
-external skill or default.
-</details>
-
-<details>
-<summary><b>wf-implement</b></summary>
-
-**Receives** — the resolved decision, root cause, the three readiness artifacts,
-conventions. It verifies gate state first (`cw status` must not print
-`mutation DENIED`).
-**Produces** — the diff, plus the *review handoff*: `cw review-context` output
-passed verbatim, the diff command, and the task label — deliberately nothing else.
-</details>
-
-<details>
-<summary><b>wf-validation-e2e</b></summary>
-
-**Receives** — `business-decision.md` and `test-strategy.md`.
-**Produces** — `validation.md`: Automated / Integration / Manual / Not Verified /
-Unrelated Failures / E2E Decision, with actual evidence. E2E is `REQUIRED` or
-`NOT JUSTIFIED` with a concrete risk reason.
-**Next phase consumes** — the reviewer re-reads this file and may re-run checks.
-</details>
-
-<details>
-<summary><b>wf-product-assessment</b></summary>
-
-**Receives** — the completed change and every prior artifact.
-**Produces** — `assessment.md`, report-only, each item evidence-backed with
-priority and scope.
-</details>
-
-<details>
-<summary><b>wf-final-report</b></summary>
-
-**Receives** — every artifact in the run directory.
-**Produces** — a stable quick report, or `final-report.md` rendered from the
-matching reusable template for bug, implementation, feature, impact, test,
-review, change, release, or business audiences. Never hides unverified areas.
-</details>
+`feature-change` (14 nodes, `BUSINESS_READY`) and `bug-fix` (adding
+`ROOT_CAUSE_READY`) are still shipped and still enforced. They exist for
+projects that deliberately want that shape; run `cw workflows` to see every
+definition and `cw run show --json` for the exact node list of a live run.
 
 ---
+
+## 8. Capabilities reference
+
+Ten skills ship in the `senior-dev` preset. They are capabilities, not workflow
+phases: each exists because it supplies a method the model would otherwise be
+missing, and each loads only when a task needs it. None is model-blocked, so the
+escalation table in `CLAUDE.md` can reach every one of them, and each can also be
+typed as a slash command.
+
+| Skill | What it adds that native reasoning lacks |
+| --- | --- |
+| `root-cause-analysis` | value bisection back from the observation, time/data/environment bisection, symptom vs contributing factor vs cause, finding tests that encode the bug |
+| `impact-analysis` | consumer discovery for same-signature semantic changes, serialized payloads and jobs as consumers, and mapping each indirect impact to the check that would catch it |
+| `feature-analysis` | flow tracing with real paths, data model and state transitions, transaction boundaries, idempotency, and an acceptance-criteria-to-verification map |
+| `sql-compare` | normalization, join and NULL semantics, aggregation fan-out, pagination stability, parameter binding, dialect differences, and proof by `EXCEPT ALL` in both directions |
+| `legacy-parity` | reference and tolerance agreed up front, characterization tests, dual-run corpora, and triage of every difference against the legacy's accidents |
+| `schema-migration` | expand/migrate/switch/contract, the two-version deploy invariant, locking behavior, resumable backfills, and an honest rollback path |
+| `api-contract-review` | the breaking-change taxonomy including silent semantic breaks, consumer enumeration, and compatible shipping strategies |
+| `performance-investigation` | measure first, locate the dominant cost, change one thing, prove it with a before/after under the same workload |
+| `map-repo` | derive `.claude/instructions/<area>.instructions.md` from repeated evidence, with a freshness record `cw instructions status` can verify |
+| `deep-change` | the one gated path for a change that cannot be reverted |
+
+### Output contracts
+
+Report structure is not part of a reasoning skill. Eleven contracts live in
+`.claude/prompts/` and are read only when the user asked for a document:
+`change-report`, `bug-report`, `impact-report`, `test-report`, `review-report`,
+`analysis-report`, `parity-report`, `migration-plan`, `business-summary`,
+`decision-record`, `release-note`. `.claude/prompts/README.md` is the index that
+selects one; audience beats document type, so a bug fix explained to a PO uses
+`business-summary.prompt.md`.
+
+### The gated path in detail
+
+`deep-change` is the only skill that drives the runtime. It opens a
+`deep-change` run whose single gate, `DECISION_READY`, is enforced by the
+PreToolUse hook:
+
+```text
+investigate -> decide (gate + decision.md) -> implement -> verify -> review -> done
+```
+
+While the gate is open every edit and every non-read-only command is denied; the
+run directory stays writable so `decision.md` — the evidence the gate depends on
+— can be written. The gate is passed when evidence settles the decision, or
+waited on when a genuine product or risk choice needs the user. `review` hands
+the `adversarial-reviewer` agent pointers only (`cw review-context` output plus
+the diff command), never the implementer's summary of their own work.
+
+### The agent
+
+One agent ships: `adversarial-reviewer`. It exists because it has an independent
+source of truth — it reads the diff and the recorded decision itself — and an
+adversarial mission: find what would have to be true for the change to be wrong.
+A subagent that re-reads the same code the main agent just read and agrees with
+it adds latency, not review, so no such agent is shipped.
 
 ## 9. How context flows
+
+On the ordinary path, context flows the way it does in any good session: the
+code you read, the change you make, the check you run, and the response. Nothing
+is written to disk, because nothing needs to outlive the task.
+
+The gated path is the exception, and it persists exactly two files:
 
 ```
 User Request
      │
      ▼
-Evidence            evidence.md        (or root-cause.md for defects)
+Investigate         (capabilities load here; nothing is written)
      │
      ▼
-Resolved Business Decision            business-decision.md   ← the canonical spec
+Decision                              decision.md   ← the canonical spec
      │
-     ▼
-Plan / Impact / Risk / Scope / Tests  implementation-plan.md
-     │                                impact-risk-scope.md
-     │                                test-strategy.md
      ▼
 Implementation                        the diff
      │
      ▼
-Validation Evidence                   validation.md
+Verification                          recorded in the response
      │
      ▼
-Independent Review                    review.md
-     │
-     ▼
-Final Report                          final-report.md
+Adversarial Review                    review.md
 ```
 
-Two rules make this work:
+Three rules make this work:
 
-**1. Context is persisted, not remembered.** Every evidence-producing phase
-persists its declared artifacts in the run directory; lightweight phases may
-declare none. A later phase reads those artifacts. This survives context
-compaction, a new session, and a reviewer that must not trust the implementer.
-The runtime enforces declared artifacts: `cw phase complete` and the next
-`cw phase enter` are both refused while one is missing or empty, and so is any
-transition made after an earlier completed phase's evidence has disappeared.
+**1. A file exists because something later needs it.** `decision.md` is read by
+the implementation and by the reviewer; `review.md` is read by the next loop and
+by the user. Nothing else is written, because nothing else has a reader. Where a
+phase does declare an artifact, the runtime enforces it: `cw phase complete` and
+the next `cw phase enter` are both refused while it is missing or empty, and so
+is any transition made after an earlier phase's evidence has disappeared.
 
-**2. `business-decision.md` is the resolved business source.** Downstream phases
-read it — not the original request, not the requirement documents. If it turns
-out to be wrong, the run goes back to the `business` phase; it is not quietly
-reinterpreted during implementation.
+**2. `decision.md` is the resolved source.** The implementation follows it — not
+the original request, not the requirement documents. If it turns out to be
+wrong, the run returns to `decide`; it is not quietly reinterpreted while coding.
+
+**3. The reviewer never reads the implementer's account.** It is handed
+`cw review-context` output and a diff command, and reads the primary sources
+itself. A review of someone's summary of their own work is not a review.
 
 ### `WAITING_USER` resume
 
@@ -1249,7 +829,7 @@ run A  →  gate WAITING  →  you answer  →  run B starts     ← evidence or
 resumed by answering the question, and `cw gate pass` returns focus to the phase
 that owns the gate. Risk escalation also preserves the task run:
 `cw run escalate <higher-workflow> --reason "<concrete finding>"`. A generic run
-opened by the prompt hook is promoted in place when routing selects its workflow.
+opened by the prompt hook is promoted in place when a workflow is selected.
 Retiring a run is reserved for a task that is actually withdrawn and is audited:
 `cw run abandon --message "<why>"` (a stated reason is required when a gate is
 still open), or `cw run start <wf> --force --reason "<why>"`.
@@ -1270,30 +850,35 @@ Actual layout of an installed, in-progress project:
 ├── policy-health.json    is the PreToolUse gate policy actually running
 ├── hook-errors.log       hook failures (only if any occurred)
 ├── quarantine.jsonl      audit of runs retired as unreadable
-├── conventions/          code.md comments.md testing.md database.md metadata.json
-├── templates/            15 report, intake, and analysis artifact templates
 ├── workflows/            optional: project workflow definitions that override built-ins by id
 └── runs/
-    └── fc-20260803-001/
+    └── dc-20260831-001/
         ├── state.json            machine-owned run state — never hand-edit
         ├── events.jsonl           append-only semantic + runtime event log
-        ├── evidence.md
-        ├── business-decision.md
-        ├── implementation-plan.md
-        ├── impact-risk-scope.md
-        ├── test-strategy.md
-        ├── validation.md
-        ├── review.md
-        ├── assessment.md
-        └── final-report.md
+        ├── decision.md
+        └── review.md
 ```
 
-(`root-cause.md` appears instead of `evidence.md` in a `bug-fix` run.)
+Shared repository knowledge does **not** live here. It lives beside the skills
+that read it, because it is committed documentation rather than machine-local
+run state:
+
+```
+.claude/
+├── instructions/   <area>.instructions.md + metadata.json   — written by /map-repo
+├── prompts/        output contracts, read only on request
+├── skills/         the ten capabilities
+├── agents/         adversarial-reviewer.md
+└── hooks/          cw-hook.mjs
+```
+
+An ordinary task writes nothing under `runs/` at all; only `deep-change` does.
+A legacy `feature-change` or `bug-fix` run still writes its own artifact set.
 
 | Path | What it is | Commit? |
 | --- | --- | --- |
-| `conventions/` | Shared repository knowledge, reused when relevant | **Commit it** |
-| `templates/` | Shared report structures; existing project versions are reused on update | **Commit it** |
+| `.claude/instructions/` | Shared repository knowledge, read when relevant | **Commit it** |
+| `.claude/prompts/` | Output contracts; project edits are preserved on update | **Commit it** |
 | `workflows/` | Your workflow definitions | **Commit it** (if you add any) |
 | `config.json` | Runtime settings; holds an absolute `runtimeUrl` valid only on this machine | Machine-local — gitignored by default |
 | `current-run`, `sessions.json`, `hook-errors.log`, `installed.json` | Machine-local bookkeeping | Gitignored by default |
@@ -1319,74 +904,92 @@ Actual layout of an installed, in-progress project:
 
 ---
 
-## 11. Conventions
+## 11. Repository instructions
 
-**Why cache them.** Re-deriving how a repository writes code, comments, tests
-and migrations on every task is slow and inconsistent. The cache makes it a
-one-time cost, and makes divergence visible.
+**Why persist them.** Re-deriving how a repository organises an area on every
+task is slow and inconsistent. Writing it down once makes it cheap to reuse and
+makes divergence visible — and scoping it per area means a frontend task never
+pays for the database knowledge.
 
-Files under `.ai-workflow/conventions/`:
+Files under `.claude/instructions/`:
 
 | File | Content |
 | --- | --- |
-| `code.md` | architecture, naming, structure, patterns |
-| `comments.md` | language, placement, docblocks, when comments are expected |
-| `testing.md` | frameworks, layout, what is tested and how |
-| `database.md` | schema, migration and data conventions |
+| `README.md` | the contract: frontmatter, sections, what belongs and what does not |
+| `<area>.instructions.md` | how this repository does one area, with real paths |
 | `metadata.json` | per area: `status`, `last_refresh`, `evidence` files, plus `repo_shape` |
 
-**Bootstrap or refresh** (inside Claude Code):
+Areas are open. A repository has the areas it has — `architecture`, `database`,
+`api`, `testing`, `frontend`, `logging`, `security`, `legacy`, or `billing` and
+`reporting` if that is what the system is made of. Nothing is shipped
+pre-written: knowledge that was not derived from this repository would be a
+stale instruction on day one.
+
+Each file declares what it governs and what it was derived from:
+
+```markdown
+---
+area: database
+appliesTo: ["src/repositories/**", "migrations/**"]
+updated: 2026-08-31
+evidence: ["src/repositories/OrderRepository.ts", "migrations/2026_03_add_status.sql"]
+---
+```
+
+**Write or refresh one** (inside Claude Code):
 
 ```
-/refresh-conventions                  # all areas
-/refresh-conventions testing database # selected areas
+/map-repo                    # the areas this repository actually has
+/map-repo database api       # selected areas
 ```
 
 **Inspect** (from a shell):
 
 ```bash
-cw conventions status
+cw instructions status
 ```
 
 Freshness is **computed**, not claimed: the CLI re-checks that every recorded
 evidence file still exists and has not been modified since `last_refresh`.
-`STALE` is a review signal; refresh only when the relevant guidance may have
-materially changed. One or two intentional local files can be sufficient for a
-bounded task.
+`STALE` is a review signal — re-read the changed file and correct the affected
+rule. It is not a reason to rediscover the whole repository.
 
 | Status | Meaning | What to do |
 | --- | --- | --- |
-| `OK` | Present, and every evidence file still exists and is unchanged | Reuse it |
-| `MISSING` | No cached file for the area | Refresh when the relevant task cannot establish the local pattern cheaply |
-| `UNRECORDED` | File exists, but `metadata.json` records no `last_refresh` — freshness cannot be verified | Review the relevant area; refresh if shared guidance is needed |
-| `STALE` | Evidence files are gone or were modified after the last refresh | Check whether the change is material to this task; refresh only then |
-| `INVALID` | `metadata.json` is unusable for the area (bad status value, non-ISO timestamp, absolute or escaping evidence path, `OK` with no evidence) | Fix/refresh the relevant area before relying on it |
+| `OK` | Present, and every evidence file still exists and is unchanged | Read it when touching the area |
+| `MISSING` | Recorded in `metadata.json` but the file is gone | Rewrite it, or drop the metadata entry |
+| `UNRECORDED` | File exists, but `metadata.json` records no `last_refresh` — freshness cannot be verified | Re-run `/map-repo <area>` so it becomes checkable |
+| `STALE` | Evidence files are gone or were modified after the last refresh | Check whether the change is material; correct the affected rule |
+| `INVALID` | `metadata.json` is unusable for the area (bad status value, non-ISO timestamp, absolute or escaping evidence path, `OK` with no evidence) | Fix it before relying on the area |
 
 Real output on a fresh install:
 
 ```
-conventions  /path/to/project/.ai-workflow/conventions
-metadata     missing — run /refresh-conventions
-✕ code      MISSING    no cached convention — run /refresh-conventions
-✕ comments  MISSING    no cached convention — run /refresh-conventions
-✕ testing   MISSING    no cached convention — run /refresh-conventions
-✕ database  MISSING    no cached convention — run /refresh-conventions
+instructions  /path/to/project/.claude/instructions
+no areas mapped yet — run /map-repo <area> when knowledge is worth persisting
 
-refresh needed: /refresh-conventions code comments testing database
-precedence: local intentional convention near the touched code > this cache > generic external skill
+every mapped area is verified — read the one that covers what you are touching
+precedence: local intentional convention near the touched code > these files > generic default
 ```
+
+An unmapped repository reports **no areas**, not a list of failures. A project
+that never needs a persisted instruction file is a healthy project, not an
+un-bootstrapped one.
 
 **Precedence, highest first:**
 
 1. a local intentional convention in the code being touched;
-2. this repository's convention cache;
+2. this repository's instruction file for the area;
 3. a generic default or external style skill.
 
 An external generic skill never overrides a convention this repository
 demonstrably follows.
 
-> **Limitation.** The cache *content* is written by the model. Only its
-> freshness and metadata shape are verified by code.
+> **Limitation.** The *content* is written by the model. Only its freshness and
+> metadata shape are verified by code.
+>
+> `cw conventions status` remains as an alias of `cw instructions status`, so a
+> project installed before 0.2 still gets an answer rather than an error.
 
 ---
 
@@ -1633,7 +1236,7 @@ persisted to `policy-health.json` as `DEGRADED`, which `cw policy` reports,
 
 | Problem | Meaning | What to do |
 | --- | --- | --- |
-| `no active run` | No run is open in this project | Normal. Start one with `/feature-change`, `/bug-fix` or `/work` |
+| `no active run` | No run is open in this project | Normal — ordinary work opens none. `/deep-change` opens a gated run |
 | `cannot start "<wf>": 1 run(s) still active` | One run at a time, on purpose | `cw status` — continue it, `cw run complete` it, or `cw run abandon --message "<why>"`. Override: `cw run start <wf> --force --reason "<why>"` |
 | `Blocked by claude-workflow-kit: … unpassed gate(s)` | A gate is open; repository writes and non-read-only commands are denied | Finish the gate phase, write its artifact, `cw gate pass <GATE>`. Do not look for a tool that gets through |
 | Run status `WAITING_USER` | Claude asked you a decision and parked the run; `gates` / `mutation` distinguish advisory L2 from hard-gated L3 | Answer in the same session. The same run resumes; do not start a new one |
@@ -1658,43 +1261,59 @@ persisted to `policy-health.json` as `DEGRADED`, which `cw policy` reports,
 
 ## 17. Practical daily usage
 
-**A small, explicit fix** — the common case, and the cheap one
+**Anything ordinary** — the common case, and the cheap one
 
 ```
-/quick-fix
-<the change + its expected result>
+<the change, and what it should do>
 ```
 
-**A feature or business-rule change** — still classified L0-L3
+No command, no classification, no run to open. Inspect, change, verify what the
+change touched, report. If reading the code turns up a shared consumer, an
+invisible cause, or a schema change, the matching capability loads by itself and
+the work continues.
+
+**When you already know which method the task needs**
 
 ```
-/feature-change
-<short business requirement>
+/sql-compare          the two queries must return the same rows
+/root-cause-analysis  the fix keeps not holding
+/impact-analysis      this helper has consumers I cannot enumerate
+/schema-migration     this touches DDL and existing rows
+/legacy-parity        the rewrite must behave exactly like the old one
 ```
 
-**A defect** — still classified L0-L3
+Typing one is a shortcut, not a mode: it loads a method, not a process.
+
+**When the change cannot be undone**
 
 ```
-/bug-fix
-<symptom + expected behaviour>
+/deep-change
+<the change, and why it is irreversible>
 ```
 
-**Not sure which**
+Production data, a destructive migration, auth, money, or a contract with
+consumers outside the repository. It holds every edit until the decision is
+recorded, and asks you only if a real choice remains.
+
+**When you want a document**
 
 ```
-/work
-<task>
+Viết báo cáo cho BA về thay đổi này.
+```
+
+The matching contract in `.claude/prompts/` is read and followed. Ask for
+nothing and none is loaded.
+
+**Record repository knowledge that keeps getting rediscovered**
+
+```
+/map-repo api
 ```
 
 **Check state after a break**
 
-```
-/wf-status
-```
-
-**See where the mission stands, and what it is waiting for**
-
 ```bash
+cw status         # the active run, its phase, its gates
 cw board          # classification, monitors, the open checkpoint, blockers
 ```
 
@@ -1704,50 +1323,45 @@ Answer in chat, or click Approve / Modify / Reject / More evidence on the Missio
 Board in the monitor. A pending checkpoint denies repository writes until you do
 — that is the point ([§22.14](#2214-answering-a-checkpoint)).
 
-You do **not** need to prescribe phases. The router classifies risk, stops
-investigation when evidence is enough, reuses local/cached conventions, and
-chooses targeted, integration, manual, or E2E verification proportionally.
-Describe the outcome and any real constraints.
-
-> **Tip — do not pay for phases you do not need.** For "make this button visible
-> for MNG; the API already allows it", the L1 path gives triage → fix → targeted
-> validation. A bounded FE+BE change uses L2. Only concrete high-risk evidence
-> activates the full gated path.
+> **Tip — depth is not something you request, it is something the code
+> justifies.** "Make this button visible for MNG; the API already allows it" is
+> two files and a targeted test. The same sentence about a permission the API
+> does *not* yet allow is a different task, and the difference is found by
+> reading the code, not by choosing a command.
 
 ---
 
 ## 18. Real example
 
-**Request**
+**Request** — no command, because most work needs none:
 
 ```
-/feature-change
 Cho phép chỉnh sửa Liên lạc không gắn dòng báo cáo, đồng thời migrate dữ liệu
 legacy và giữ tương thích cho API client cũ.
 ```
 
-The migration and compatibility requirements make this L3. Without them, the
-bounded UI/API behavior would normally take the L2 path.
+**Inspect.** Where a Liên lạc is created and updated; whether "gắn dòng báo cáo"
+is a nullable link, a status, or a separate table; which screens list and edit
+it; which permissions guard editing; whether existing tests assert that editing
+is blocked. Two findings change the shape of the task:
 
-**Evidence Analysis** looks for: where a Liên lạc is created and updated; whether
-"gắn dòng báo cáo" is a nullable link, a status, or a separate table; which
-screens list and edit it; which permissions guard editing; whether requirement
-documents describe editing at all; whether existing tests assert that editing is
-blocked. It writes what it found, with file references, and marks each conclusion
-FACT / INFERENCE / ASSUMPTION / PROPOSAL.
+- the code already allows updating the Tag field, while the requirement document
+  says a Liên lạc is immutable after creation;
+- a test asserts "no edit after report link", but only for the linked case.
 
-It surfaces two contradictions:
+**Escalation, from evidence not from the wording.** Reading turns up three
+triggers at once: legacy rows must be migrated (`schema-migration`), an existing
+API client must keep working (`api-contract-review`), and the change is to a
+permission rule over production data that cannot simply be reverted
+(`deep-change`). Without the migration and compatibility requirements, the same
+sentence would have been an ordinary multi-file change with a targeted test.
 
-- `C-001` — the requirement document says a Liên lạc is immutable after creation,
-  while the code already allows updating the Tag field.
-- `C-002` — a test asserts "no edit after report link", but only for the linked
-  case; the unlinked case is untested.
-
-**Business ambiguity.** "Chỉnh sửa" is not yet a decision: which fields, and what
-happens to an unlinked record that later gets linked? The gate parks and asks one
-question — Problem / Impact / Recommended resolution / Decision required — and
-the run shows `WAITING_USER`. No code changes while it waits; the hook denies
-them.
+**The open decision.** "Chỉnh sửa" is not yet a decision: which fields, and what
+happens to an unlinked record that later gets linked? This is a genuine product
+choice over production data, so `deep-change` parks on `DECISION_READY` and asks
+once — what was found, what must be decided, the recommendation, the
+alternatives, what is at risk. No code changes while it waits; the hook denies
+every edit.
 
 **Your answer**
 
@@ -1756,40 +1370,38 @@ Chỉ cho sửa Liên lạc không gắn dòng báo cáo.
 Cho sửa nội dung và Tag.
 ```
 
-**Resolved decision** (`business-decision.md`) — editing is permitted only while
-the Liên lạc has no report-line link; editable fields are content and Tag;
-attempting to edit a linked record is rejected with the existing permission
-error; once linked, the record becomes immutable again; existing linked-record
-behaviour is unchanged; the requirement document's blanket immutability rule is
+**`decision.md`** — editing is permitted only while the Liên lạc has no
+report-line link; editable fields are content and Tag; attempting to edit a
+linked record is rejected with the existing permission error; once linked, the
+record becomes immutable again. What is irreversible: the legacy backfill, whose
+recovery path is a restore. Deploy order: add the nullable state column and
+dual-write, backfill in batches, switch reads, and drop the old flag in a later
+release. Verification: the backfill count query must reach zero, the old API
+shape must still deserialize, and the linked-edit rejection must be tested from
+both the API and the UI path. The document's blanket immutability rule is
 recorded as outdated for the unlinked case.
 
-**Planning** (`implementation-plan.md`, `impact-risk-scope.md`,
-`test-strategy.md`) — the layers to touch (validation rule, service, API
-contract, edit form), the indirect impact (list and detail screens, filters,
-export, audit history), the risks (a record linked concurrently between load and
-save; legacy rows with inconsistent link state), the explicit out-of-scope items
-(bulk edit, editing linked records), and the tests to write: unlinked edit
-succeeds, linked edit rejected, link-after-load race rejected, audit entry
-written, legacy rows unaffected.
+**Implement.** The smallest change that carries out that decision, stopping at
+the release boundary the decision named — the destructive drop is not in this
+diff. No refactoring of neighbouring code, no "while I'm here" improvements.
 
-**Implementation** — the smallest change inside that scope. No refactoring of
-neighbouring code, no "while I'm here" improvements.
+**Verify.** Evidence aimed at what this change can break: the migration
+verification queries against a production-shaped snapshot, an old-shape request
+test, the linked-edit negative case, and the concurrency window between load and
+save. Anything not covered — the bulk-edit path has no fixture — is reported as
+not verified rather than implied.
 
-**Validation** (`validation.md`) — actual targeted migration, service/API,
-compatibility, and integration checks mapped to each rule. It records whether a
-real-flow E2E still closes a meaningful gap; if not, E2E is skipped with the
-reason and any quick manual check is listed with its expected result.
+**Adversarial review** (`review.md`) — a separate agent reads `decision.md` and
+the diff itself, never the implementer's account, and asks what would have to be
+true for this to be wrong: is the recovery path still available given what the
+diff does, does the deploy order in the code match the approved one, does any
+consumer outside the diff read the changed shape. `PASS` or `FAIL` with P0–P3
+findings; correctness findings go back to implementation, maximum three loops.
 
-**Independent review** (`review.md`) — a separate agent reads the resolved
-specification, the plan, the test strategy, the validation evidence and the diff
-itself (never the implementer's summary), and returns `PASS` or `FAIL` with
-findings. Correctness findings go back to implementation; maximum three loops.
-
-**Outcome** (`final-report.md`) — what changed, the key decision (unlinked-only
-editing, content and Tag), the actual validation evidence and E2E decision, remaining risks
-(the concurrency window is guarded but legacy rows with inconsistent link state
-still exist), and follow-ups recorded in `assessment.md` as separate tasks rather
-than smuggled into this diff.
+**Outcome** — Changed / Why / Verified / Not verified / Risk, plus the decision,
+who made it, and the recovery path if it turns out to be wrong. Legacy rows with
+inconsistent link state still exist and are named as remaining risk. Follow-ups
+are one line in the report, not extra changes in the diff.
 
 ---
 
@@ -1853,16 +1465,16 @@ nodes:
 
   - id: investigate
     label: Investigate
-    skill: wf-evidence-reconciliation
-    artifact: evidence.md
+    skill: deep-change
+    artifact: findings.md
     description: Read-only investigation.
 
   - id: decide
     label: Decision
-    skill: wf-business-decision
+    skill: deep-change
     gate: SPIKE_DECIDED
     artifacts:
-      - business-decision.md
+      - decision.md
     description: Resolve what to do with the finding.
 
   - id: await-decide
@@ -1899,33 +1511,56 @@ they are derived from the definition, not written per workflow.
 
 ### A new skill
 
-A skill is `.claude/skills/<name>/SKILL.md` with YAML frontmatter. Minimal
-template for a workflow step:
+A skill is `.claude/skills/<name>/SKILL.md` with YAML frontmatter. Before
+writing one, answer the question that decides whether it should exist:
+
+> **If I delete this skill, what capability is lost?**
+
+"The model is no longer forced through a step" is not a capability. A skill
+earns its place when it supplies domain rules, a matching or comparison method,
+a specialized verification technique, or a procedure that is genuinely
+non-trivial — something a competent engineer would have to be taught.
 
 ```markdown
 ---
-name: wf-my-step
-description: One sentence on what this step does and when the workflow uses it.
-user-invocable: false      # a wf-* step: the model invokes it, you do not
-effort: high               # reasoning effort for this step
+name: cache-invalidation
+description: One sentence on the problem it solves and the evidence that should
+  trigger it — this is what makes it load at the right moment.
+effort: medium
 ---
 
-What the step must do, in imperative form.
-
-Persist the result to `.ai-workflow/runs/<runId>/my-step.md` and record it with
-`cw artifact my-step.md`.
-
-Return the result to the calling workflow. Do not write a long report to the user.
+The method, in imperative form: what to establish, in what order, what to check
+explicitly, when to stop, and how to report the result.
 ```
 
-For a **user entry point** instead use `disable-model-invocation: true` (you type
-it; the model cannot invoke it) and add `argument-hint: "[what to pass]"`.
+Leave the frontmatter free of `disable-model-invocation` and
+`user-invocable: false` so the skill can both load on evidence and be typed as a
+slash command. Add `argument-hint: "[what to pass]"` when it takes an argument.
+
+Keep report structure out of it. If the skill produces a document, put the
+structure in `.claude/prompts/<name>.prompt.md` and let the skill stay about
+method.
 
 Skills you create by hand in `.claude/skills/` are yours: the installer only
 manages the files listed in `.ai-workflow/installed.json`, and `uninstall`
 removes only those. To ship a skill **with** the kit, add its directory under
 `packages/claude-adapter/presets/senior-dev/skills/` and list its name in
-`preset.json`.
+`preset.json` — and add an escalation trigger for it in the preset's
+`claude-md.md`, or nothing will ever load it.
+
+### A new scoped instruction area
+
+Areas are open: `/map-repo <area>` writes
+`.claude/instructions/<area>.instructions.md` for whatever this system is made
+of. Nothing needs to be registered — `cw instructions status` discovers areas
+from the files and metadata that exist.
+
+### A new output contract
+
+Add `.claude/prompts/<name>.prompt.md` with the document's section order and its
+truth-telling rules, then add a row to `.claude/prompts/README.md` so it can be
+selected. To ship one with the kit, put it under the preset's `prompts/`
+directory and list it in `preset.json`.
 
 ### A new phase in an existing workflow
 
@@ -1939,8 +1574,9 @@ workflow YAML  →  declared artifact  →  skill that writes it  →  monitor t
 2. Point it at a skill that persists that artifact.
 3. If it owns a gate, add the matching `waiting` node and the two conditional
    edges.
-4. Update the workflow body skill (`wf-feature-change` / `wf-bug-fix`) so the
-   phase is actually entered — the body is the script that emits transitions.
+4. Update the skill that drives the workflow (`deep-change` for the shipped
+   gated path) so the phase is actually entered — the skill is the script that
+   emits transitions.
 
 The monitor needs no changes: it renders whatever the definition contains.
 
@@ -1999,6 +1635,16 @@ conclusion, which risks are live, and what still needs a human decision.
 
 Everything here lives inside the same run (`state.json`) and is written only
 through `cw mission …` / `cw checkpoint …`.
+
+> **Since 0.2, this is opt-in runtime functionality, not the default path.** The
+> `senior-dev` preset no longer classifies every task: ordinary work runs
+> natively, and depth comes from what reading the code turns up (see
+> [§5](#5-core-rules)). The router, the confidence floors, the checkpoint
+> machinery and the board all still work exactly as documented below, and are
+> what you get when you drive a multi-phase topology deliberately —
+> `cw run start standard-change`, `cw mission classify …` — or build a preset of
+> your own on top of them. The examples below therefore start a run explicitly
+> instead of typing an entry command.
 
 **Reference:** [22.1 router](#221-the-router) ·
 [22.2 checkpoints](#222-checkpoints-have-teeth) ·
@@ -2234,7 +1880,7 @@ cancelled never reads as success.
 | `cw mission deliverable <name> [--not-required] [--status …] [--location …]` | Deliverables contract |
 | `cw mission action "<what is happening now>"` | Current Action on the board |
 | `cw mission accept-risk --reason "…" [--blockers "a;b"]` | "Proceed Anyway", audited |
-| `cw mission template [--type <taskType>]` | Report template for the task type |
+| `cw mission template [--type <taskType>]` | Output contract for the task type |
 | `cw mission show [--json]` | The mission record |
 | `cw checkpoint open <KIND> --summary "…" --decision "…" [--recommend …] [--alternatives …] [--evidence …] [--risk …] [--impact …] [--confidence n]` | Open a checkpoint |
 | `cw checkpoint resolve <id> --action approve\|reject\|modify\|cancel [--note "…"]` | Record the user's answer |
@@ -2248,7 +1894,7 @@ Nobody has to remember the command list — this is what actually happens:
 
 | Step | Who | What |
 | --- | --- | --- |
-| 1 | you | `/work <task>` (or `/quick-fix`, `/feature-change`, `/bug-fix`, `/solution-analysis`) |
+| 1 | you | describe the task (this table assumes a project that opted into classification) |
 | 2 | Claude | classifies type + complexity + structural flags, asks `cw mission route` |
 | 3 | Claude | prints the **Mission Header** and starts the run |
 | 4 | you | glance at the header: wrong depth is cheapest to fix here |
@@ -2281,11 +1927,12 @@ Claude re-classifies. The router escalates the same run in place; nothing is los
 ### 22.10 Worked example A — Lightning (a label)
 
 ```text
-/work
 Đổi label "Submit" thành "Gửi yêu cầu" ở màn hình Contact Request.
 ```
 
-What Claude runs, in order:
+Under the shipped preset this is simply done: locate the string, change it,
+build. What follows is what the *runtime* records when a project drives the
+`quick-fix` topology deliberately, in order:
 
 ```bash
 cw run start quick-fix --label "rename Submit on Contact Request"
@@ -2317,7 +1964,6 @@ cw run escalate standard-change --reason "shared i18n key affects 4 screens"
 ### 22.11 Worked example B — Standard, with a checkpoint
 
 ```text
-/work
 Export đơn hàng phải lọc theo tenant. Field cũ trong API đang là customer_id.
 ```
 
@@ -2332,7 +1978,7 @@ risk        MEDIUM
 checkpoints PLAN, DESIGN
 validation  build, compile, unit-test, integration-test, scoped-regression, api-contract-check
 thresholds  requirement>=70% scope>=70% businessRule>=70% design>=70% implementation>=75%
-template    implementation-report.md
+template    change-report.prompt.md
 ```
 
 Two checkpoints are now **mandatory**, so the editor is already blocked:
@@ -2413,9 +2059,12 @@ reached CRITICAL.
 ### 22.13 Worked example D — Research (no code)
 
 ```text
-/solution-analysis
 So sánh 2 cách làm audit log: bảng riêng vs event stream. Chưa cần code.
 ```
+
+Under the shipped preset this loads `feature-analysis` and answers in the
+conversation, writing a document only if one was asked for
+(`analysis-report.prompt.md`). Driven as a recorded run instead:
 
 ```bash
 cw run start solution-analysis --label "audit log approach"
@@ -2426,7 +2075,7 @@ cw mission classify --type research --complexity medium --flags analysis-only
 The run produces the seven analysis artifacts, records confidence per dimension,
 and stops at `ANALYSIS_READY`. Nothing in the repository changes. Implementation
 starts only after `cw analysis approve` + `cw analysis handoff`, which creates a
-trace-linked `feature-change` run — see [§6](#6-workflow-guide).
+trace-linked `feature-change` run — see [§6](#6-working-guide).
 
 ### 22.14 Answering a checkpoint
 
@@ -2526,10 +2175,11 @@ npx claude-workflow-kit doctor
 customised is preserved and reported as a conflict to merge by hand. What V2 adds
 to an existing project:
 
-- two skills — `wf-mission-board`, `wf-checkpoint`;
-- a rewritten `work` skill (the router);
-- ten report templates (existing project templates always win);
-- new `CLAUDE.md` sections inside the managed block;
+- the `deep-change` workflow and its skill — one gate instead of five;
+- ten specialist capabilities in place of the workflow-phase skills;
+- eleven output contracts in `.claude/prompts/` (project edits always win);
+- `.claude/instructions/` and `/map-repo`, replacing `.ai-workflow/conventions/`;
+- a `CLAUDE.md` managed block roughly a third of its former size;
 - `implementation: true` on the implementation phase of the shipped workflows.
 
 Runs created before V2 keep working: `mission` is optional, and a run without one
@@ -2573,6 +2223,117 @@ and `fix`.
   still need their evidence artifact on disk; `accept-risk` cannot open them.
 - Board actions are not authenticated beyond same-origin: anyone who can reach
   `127.0.0.1` with a shell can already run `cw`.
+
+---
+
+## 23. The app
+
+`cw monitor` watches one repository. `cw app` is the same thing grown up: one
+process, every project you work in, and the two jobs that used to need a
+terminal — installing the kit, and starting a session.
+
+```bash
+npx claude-workflow-kit app --open          # http://127.0.0.1:4600
+npx claude-workflow-kit app --add .         # register this repo on the way in
+```
+
+Nothing about the workflow changes. The app reads the same `.ai-workflow`
+directories, runs the same skills, and enforces the same gates; it does not have
+a private copy of anything.
+
+### 23.1 What it adds
+
+| | |
+| --- | --- |
+| **Projects** | register any directory; the switcher carries each project's waiting-checkpoint count |
+| **Install / Doctor** | run `init`, `update` and `doctor` from the Projects screen instead of the CLI |
+| **Settings** | edit the safe half of `config.json` in a form (see [§23.4](#234-what-settings-will-not-let-you-change)) |
+| **Launch** | start a Claude Code session in a project and watch its output |
+| **Across every project** | run totals, active work and success rate rolled up over the workspace |
+
+Everything the single-project monitor already did — the phase diagram, the live
+rail, the Mission Board, run history — is unchanged, just scoped to the project
+in the URL.
+
+### 23.2 Where the project list lives
+
+`~/.claude-workflow-kit/workspace.json` (override with `CW_HOME`). It holds a
+name, a path and a runtime directory per project — nothing else, and nothing
+from inside your repositories.
+
+A project's id is derived from its path, so adding the same directory twice
+updates the entry rather than creating a second one. **Removing a project only
+unregisters it**: the skills, hooks, `CLAUDE.md` block and `.ai-workflow`
+directory stay exactly where they are. Use `claude-workflow-kit uninstall` if you
+actually want them gone.
+
+### 23.3 Launching a task
+
+The app spawns `claude` in the project directory with your prompt on **stdin**,
+and captures its `stream-json` output to `.ai-workflow/app/tasks/`. The session
+is an ordinary one: it runs your installed skills, its hooks feed the same run
+state, and the run shows up in the monitor like any other.
+
+Modes, in order of how much they can do:
+
+| Mode | The session can | Confirmation |
+| --- | --- | --- |
+| **Plan** (default) | read and propose | none needed |
+| **Ask** | nothing unattended — it stops at the first prompt, because no one is at the terminal to answer | none needed |
+| **Edit files** (`acceptEdits`) | write files without asking | explicit |
+| **Full access** (`bypassPermissions`) | write files *and* run commands without asking | explicit |
+
+The two edit-capable modes are refused by the server unless the request carries
+`confirmUnsafe`, and the UI makes you tick a box naming the repository first.
+Use them only where you can restore the working tree.
+
+If the app says **no claude**, Claude Code is not runnable from the app's
+environment. Install it, or point `CW_CLAUDE_BIN` at the binary, and restart.
+
+A session the app started is stopped with **Stop**. A session left running when
+the app restarted is reported as `UNKNOWN` rather than adopted — the app cannot
+honestly claim to be watching a process it did not spawn.
+
+### 23.4 What Settings will not let you change
+
+Editable: `monitorPort`, `stallThresholdSeconds`, `semanticLagThresholdSeconds`,
+`autoGenericRun`, `enforceGates`, `analysisReportDir`.
+
+Read-only from the app: `mutationTools`, `mutationToolPatterns`, `commandTools`,
+`readOnlyCommands`, `runtimeUrl`, `stateSchemaVersion`. These decide what the
+PreToolUse policy treats as a write, and a form that can empty one of those lists
+is a form that can switch off gate enforcement by accident. Edit the file, or
+re-run the installer. (`enforceGates` stays editable because turning it off is a
+deliberate act, and the monitor then says `policy disabled` out loud.)
+
+### 23.5 Security
+
+The app binds `127.0.0.1` and has no authentication — like the monitor, it
+assumes anyone who can reach it could already run `cw` in a shell. Every write
+(board actions, config, install, launching a task) is refused when it arrives
+with a foreign `Origin` header, so a web page you have open in another tab cannot
+approve a checkpoint or start a session on your behalf.
+
+Serve it to anything other than localhost at your own risk: `--host` exists, and
+there is nothing behind it.
+
+### 23.6 `cw monitor` still works
+
+The monitor serves the same UI and answers both dialects — its original
+`/api/state`, `/api/runs/...` URLs, and the app's `/api/projects/local/...` ones.
+It presents itself as a workspace of exactly one project with installing and
+launching switched off, so the screens that need them are simply not offered.
+
+### 23.7 What the app does not do
+
+- It is not a Claude Code client. It starts a session and shows its output; it
+  cannot answer a prompt the session asks mid-run. That is what the two
+  confirmation-free modes are for, and why `Ask` mode stalls.
+- It does not sync anything. The registry is one machine's list of directories.
+- It does not run remotely. There is no auth, no multi-user state, and run state
+  is still files on disk (D4).
+- Registering a project does not install anything; installing is a separate,
+  explicit step.
 
 ---
 

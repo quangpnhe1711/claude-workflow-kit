@@ -56,8 +56,13 @@ export class RuntimePaths {
   get runsDir() {
     return join(this.runtimeDir, 'runs');
   }
-  get conventionsDir() {
-    return join(this.runtimeDir, 'conventions');
+  /**
+   * Scoped repository knowledge. It lives beside the skills that read it rather
+   * than in the runtime directory: it is committed repository documentation, not
+   * machine-local run state.
+   */
+  get instructionsDir() {
+    return join(this.projectRoot, '.claude', 'instructions');
   }
   get currentRunFile() {
     return join(this.runtimeDir, 'current-run');

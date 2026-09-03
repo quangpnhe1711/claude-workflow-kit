@@ -160,7 +160,7 @@ export class WorkflowRuntime {
 
   ensureRuntimeDir(): void {
     mkdirSync(this.paths.runsDir, { recursive: true });
-    mkdirSync(this.paths.conventionsDir, { recursive: true });
+    mkdirSync(this.paths.instructionsDir, { recursive: true });
   }
 
   runIds(): string[] {

@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
@@ -10,5 +12,11 @@
     "outDir": "dist-test",
     "rootDir": "src"
   },
-  "include": ["src/derive.ts", "src/graphModel.ts", "src/types.ts", "src/test/**/*.ts"]
+  "include": [
+    "src/derive.ts",
+    "src/graphModel.ts",
+    "src/routes.ts",
+    "src/types.ts",
+    "src/test/**/*.ts"
+  ]
 }

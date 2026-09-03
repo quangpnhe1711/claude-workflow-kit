@@ -384,18 +384,20 @@ test('runtime events move the runtime clock only; transitions move both', () => 
   }
 });
 
-// ---- F12: convention cache ------------------------------------------------
+// ---- F12: scoped instruction freshness -------------------------------------
 
-test('convention status reports missing, unrecorded, valid and stale areas', () => {
+test('instruction status reports unmapped, unrecorded, valid and stale areas', () => {
   const { dir, runtime, cleanup } = sandbox();
   try {
-    const dirOf = runtime.paths.conventionsDir;
+    const dirOf = runtime.paths.instructionsDir;
 
+    // Nothing mapped is not a finding: an empty layer simply has no areas, and
+    // areas are whatever this repository turned out to have.
     const empty = inspectConventions(runtime.paths);
-    assert.deepEqual(empty.refreshNeeded, ['code', 'comments', 'testing', 'database']);
-    assert.equal(empty.areas.every((a) => a.status === 'MISSING'), true);
+    assert.deepEqual(empty.areas, []);
+    assert.deepEqual(empty.refreshNeeded, []);
 
-    writeFileSync(join(dirOf, 'code.md'), '# code\n');
+    writeFileSync(join(dirOf, 'code.instructions.md'), '# code\n');
     assert.equal(inspectConventions(runtime.paths).areas[0]?.status, 'UNRECORDED');
 
     writeFileSync(join(dir, 'sample.ts'), 'export const a = 1;\n');
@@ -428,13 +430,13 @@ test('convention status reports missing, unrecorded, valid and stale areas', () 
   }
 });
 
-test('convention metadata is validated, not believed (CONV-01)', () => {
+test('instruction metadata is validated, not believed (CONV-01)', () => {
   const { dir, runtime, cleanup } = sandbox();
   const codeArea = () => inspectConventions(runtime.paths).areas.find((a) => a.area === 'code')!;
   const meta = (value: unknown) =>
-    writeFileSync(join(runtime.paths.conventionsDir, 'metadata.json'), JSON.stringify({ code: value }));
+    writeFileSync(join(runtime.paths.instructionsDir, 'metadata.json'), JSON.stringify({ code: value }));
   try {
-    writeFileSync(join(runtime.paths.conventionsDir, 'code.md'), '# code\n');
+    writeFileSync(join(runtime.paths.instructionsDir, 'code.instructions.md'), '# code\n');
     writeFileSync(join(dir, 'sample.ts'), 'export const a = 1;\n');
     const now = new Date().toISOString();
 

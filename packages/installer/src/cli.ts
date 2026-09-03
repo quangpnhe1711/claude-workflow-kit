@@ -1,5 +1,6 @@
 import { relative, resolve } from 'node:path';
 import { parseArgs } from '@claude-workflow-kit/workflow-core';
+import { openBrowser, startApp } from './app.js';
 import { doctor, formatChecks } from './doctor.js';
 import { install, uninstall } from './install.js';
 import { kitVersion, listPresets } from './paths.js';
@@ -10,6 +11,7 @@ const USAGE = `claude-workflow-kit ${kitVersion()}
   claude-workflow-kit update    [options]   refresh managed skills/agents/hooks/rules
   claude-workflow-kit doctor    [options]   verify the installation
   claude-workflow-kit uninstall [options]   remove managed content
+  claude-workflow-kit app       [options]   open the multi-project app
   cw monitor                    [options]   start the live workflow monitor
 
 Options:
@@ -20,6 +22,9 @@ Options:
   --no-hooks         do not install Claude Code hooks
   --no-claude-md     do not touch CLAUDE.md
   --purge            uninstall only: also delete the runtime directory
+  --add <dir>        app only: register a project before serving
+  --host <h>         app only: listen address (default: 127.0.0.1)
+  --open             app only: open the app in a browser
   --dry-run          show what would change, write nothing
   --json             machine-readable output
 
@@ -78,7 +83,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       for (const item of result.conflicts) process.stdout.write(`  ! preserved conflict ${item}\n`);
       for (const file of result.backups) process.stdout.write(`  backup ${rel(file)}\n`);
       process.stdout.write(
-        `\nNext:\n  cw monitor            live workflow diagram on http://127.0.0.1:${result.config.monitorPort}\n  claude-workflow-kit doctor\n  /refresh-conventions  bootstrap repository conventions (inside Claude Code)\n`,
+        `\nNext:\n  cw monitor            live workflow diagram on http://127.0.0.1:${result.config.monitorPort}\n  claude-workflow-kit doctor\n  /map-repo             record how this repo does an area (inside Claude Code)\n`,
       );
       return;
     }
@@ -95,6 +100,38 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         process.stdout.write(`${formatChecks(checks)}\n`);
       }
       if (checks.some((c) => c.status === 'fail')) process.exitCode = 1;
+      return;
+    }
+
+    case 'app': {
+      // `--add <dir>` for one project; further directories are positional, since
+      // `parseArgs` keeps only the last value of a repeated flag.
+      const add = [
+        ...(typeof flags['add'] === 'string' ? [flags['add']] : []),
+        ...positional.slice(1),
+      ];
+      const handle = startApp({
+        ...(typeof flags['port'] === 'string' ? { port: Number(flags['port']) } : {}),
+        ...(typeof flags['host'] === 'string' ? { host: flags['host'] } : {}),
+        ...(typeof flags['ui'] === 'string' ? { uiDir: resolve(flags['ui']) } : {}),
+        ...(add.length ? { add } : {}),
+      });
+      await handle.ready;
+      process.stdout.write(`claude-workflow-kit app: ${handle.url}\n`);
+      const registered = handle.workspace.list();
+      process.stdout.write(
+        registered.length
+          ? `${registered.length} project${registered.length === 1 ? '' : 's'} registered\n`
+          : 'No projects registered yet — add one from the app, or run with --add <dir>\n',
+      );
+      if (flags['open'] === true) openBrowser(handle.url);
+
+      const shutdown = () => {
+        void handle.close().then(() => process.exit(0));
+      };
+      process.on('SIGINT', shutdown);
+      process.on('SIGTERM', shutdown);
+      await new Promise<void>((done) => handle.server.on('close', () => done()));
       return;
     }
 

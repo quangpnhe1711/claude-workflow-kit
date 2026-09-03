@@ -76,8 +76,6 @@ Everything here is runtime data for this project. The toolkit itself lives in
 the \`claude-workflow-kit\` package, not in this directory.
 
 - \`config.json\` — runtime settings (monitor port, stall threshold, paths).
-- \`conventions/\` — persisted repository conventions, reused across tasks.
-- \`templates/\` — report, optional intake, and solution-analysis artifact templates.
 - \`runs/<run-id>/\` — one controlled workflow run: \`state.json\`,
   \`events.jsonl\` and the evidence artifacts the workflow produced.
 - \`current-run\` — id of the active run, so a follow-up prompt continues it.
@@ -89,9 +87,10 @@ the \`claude-workflow-kit\` package, not in this directory.
 
 State is owned by the \`cw\` CLI. Do not hand-edit \`state.json\`.
 
-Commit \`conventions/\` and \`templates/\` — they are shared repository knowledge
-and reusable reporting structure. Runtime/run state is machine-local and is
-gitignored by the installed \`.gitignore\`;
+Shared repository knowledge lives outside this directory: scoped instructions in
+\`.claude/instructions/\` and output contracts in \`.claude/prompts/\`. Commit
+those. Runtime/run state is machine-local and is gitignored by the installed
+\`.gitignore\`;
 \`config.json\` in particular holds an absolute \`runtimeUrl\` for this machine.
 `;
 
@@ -179,8 +178,7 @@ export function install(options: InstallOptions): InstallResult {
   // --- runtime directory ---
   if (!dryRun) {
     mkdirSync(join(runtimeDir, 'runs'), { recursive: true });
-    mkdirSync(join(runtimeDir, 'conventions'), { recursive: true });
-    mkdirSync(join(runtimeDir, 'templates'), { recursive: true });
+    mkdirSync(join(claudeDir, 'instructions'), { recursive: true });
   }
   write(result, join(runtimeDir, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, dryRun);
   if (!existsSync(join(runtimeDir, 'README.md'))) {
@@ -206,19 +204,29 @@ export function install(options: InstallOptions): InstallResult {
     managedCopy(from, to, `skill ${skill}`);
   }
 
-  // --- standardized report templates ---
-  for (const template of preset.templates ?? []) {
-    const from = join(preset.dir, 'templates', template);
+  // --- scoped repository knowledge ---
+  // The kit ships the contract for this layer, never its content: how a
+  // repository does an area can only be derived from that repository, which is
+  // what /map-repo does. A shipped stub would be a stale instruction on day one.
+  for (const file of preset.instructions ?? []) {
+    const from = join(preset.dir, 'instructions', file);
     if (!existsSync(from)) {
-      result.skipped.push(`template ${template} (missing in preset)`);
+      result.skipped.push(`instructions ${file} (missing in preset)`);
       continue;
     }
-    const to = join(runtimeDir, 'templates', template);
-    if (existsSync(to)) {
-      result.skipped.push(`template ${template} (existing project template reused)`);
+    managedCopy(from, join(claudeDir, 'instructions', file), `instructions ${file}`);
+  }
+
+  // --- output contracts ---
+  // Read on demand when the user asks for a document, so they cost no context
+  // on an ordinary task.
+  for (const file of preset.prompts ?? []) {
+    const from = join(preset.dir, 'prompts', file);
+    if (!existsSync(from)) {
+      result.skipped.push(`prompt ${file} (missing in preset)`);
       continue;
     }
-    copy(result, from, to, dryRun);
+    managedCopy(from, join(claudeDir, 'prompts', file), `prompt ${file}`);
   }
 
   for (const agent of preset.agents) {
@@ -339,7 +347,7 @@ export function uninstall(options: UninstallOptions): UninstallResult {
     removed.push(runtimeDir);
     if (!dryRun) rmSync(runtimeDir, { recursive: true, force: true });
   } else if (existsSync(runtimeDir)) {
-    kept.push(`${runtimeDir} (run evidence, conventions, and report templates; use --purge to delete)`);
+    kept.push(`${runtimeDir} (run evidence and runtime config; use --purge to delete)`);
   }
 
   return { removed, kept };

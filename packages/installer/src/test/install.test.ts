@@ -62,22 +62,26 @@ test('init installs skills, agents, hooks, runtime and the managed block', () =>
     writeFileSync(join(dir, 'CLAUDE.md'), '# Existing\n\nProject rule stays.\n', 'utf8');
     const result = install({ projectRoot: dir });
 
-    assert.ok(existsSync(join(dir, '.claude', 'skills', 'feature-change', 'SKILL.md')));
-    assert.ok(existsSync(join(dir, '.claude', 'skills', 'solution-analysis', 'SKILL.md')));
-    assert.ok(existsSync(join(dir, '.claude', 'skills', 'wf-feature-from-analysis', 'SKILL.md')));
-    assert.ok(existsSync(join(dir, '.claude', 'agents', 'independent-reviewer.md')));
+    assert.ok(existsSync(join(dir, '.claude', 'skills', 'root-cause-analysis', 'SKILL.md')));
+    assert.ok(existsSync(join(dir, '.claude', 'skills', 'sql-compare', 'SKILL.md')));
+    assert.ok(existsSync(join(dir, '.claude', 'skills', 'deep-change', 'SKILL.md')));
+    assert.ok(existsSync(join(dir, '.claude', 'agents', 'adversarial-reviewer.md')));
     assert.ok(existsSync(join(dir, '.claude', 'hooks', 'cw-hook.mjs')));
+    assert.ok(existsSync(join(dir, '.claude', 'instructions', 'README.md')));
+    assert.ok(existsSync(join(dir, '.claude', 'prompts', 'bug-report.prompt.md')));
     assert.ok(existsSync(join(dir, '.ai-workflow', 'config.json')));
     assert.ok(existsSync(join(dir, '.ai-workflow', 'runs')));
-    assert.ok(existsSync(join(dir, '.ai-workflow', 'templates', 'bug-report.md')));
-    assert.ok(existsSync(join(dir, '.ai-workflow', 'templates', 'business-change-report.md')));
-    assert.ok(existsSync(join(dir, '.ai-workflow', 'templates', 'recommended-solution.md')));
     assert.ok(existsSync(join(dir, 'CLAUDE.md.cw-backup')));
+
+    // The instructions layer ships its contract and none of its content: how a
+    // repository does an area can only come from that repository.
+    assert.equal(existsSync(join(dir, '.claude', 'instructions', 'database.instructions.md')), false);
 
     const claudeMd = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
     assert.ok(claudeMd.includes('Project rule stays.'));
-    assert.ok(claudeMd.includes('NO BUSINESS DECISION = NO CODING in an L3 run.'));
-    assert.ok(claudeMd.includes('Classify every engineering task first'));
+    assert.ok(claudeMd.includes('Depth is chosen by three facts'));
+    assert.ok(claudeMd.includes('Escalation triggers'));
+    assert.ok(claudeMd.includes('Stop rules'));
 
     const settings = JSON.parse(readFileSync(join(dir, '.claude', 'settings.json'), 'utf8')) as {
       hooks: Record<string, unknown[]>;
@@ -133,11 +137,11 @@ test('uninstall removes managed content and keeps runtime evidence and shared as
     install({ projectRoot: dir });
     const result = uninstall({ projectRoot: dir });
 
-    assert.ok(!existsSync(join(dir, '.claude', 'skills', 'feature-change', 'SKILL.md')));
+    assert.ok(!existsSync(join(dir, '.claude', 'skills', 'root-cause-analysis', 'SKILL.md')));
+    assert.ok(!existsSync(join(dir, '.claude', 'prompts', 'bug-report.prompt.md')));
     assert.ok(!existsSync(join(dir, '.claude', 'hooks', 'cw-hook.mjs')));
     assert.ok(existsSync(join(dir, '.ai-workflow')));
-    assert.ok(existsSync(join(dir, '.ai-workflow', 'templates', 'bug-report.md')));
-    assert.match(result.kept.join('\n'), /run evidence, conventions, and report templates/);
+    assert.match(result.kept.join('\n'), /run evidence and runtime config/);
 
     const claudeMd = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
     assert.ok(claudeMd.includes('Project rule stays.'));
@@ -176,7 +180,7 @@ test('hook commands are project-dir anchored, never cwd-relative', () => {
   }
 });
 
-test('machine-local runtime files are gitignored, shared conventions and templates are not', () => {
+test('machine-local runtime files are gitignored; shared knowledge lives outside them', () => {
   const { dir, cleanup } = project();
   try {
     install({ projectRoot: dir });
@@ -184,156 +188,174 @@ test('machine-local runtime files are gitignored, shared conventions and templat
     for (const entry of ['current-run', 'sessions.json', 'hook-errors.log', 'config.json']) {
       assert.ok(ignore.includes(entry), `${entry} must be gitignored`);
     }
-    assert.ok(!ignore.includes('conventions'), 'shared repository knowledge stays committable');
-    assert.ok(!ignore.includes('templates'), 'shared report templates stay committable');
     const runtimeReadme = readFileSync(join(dir, '.ai-workflow', 'README.md'), 'utf8');
-    assert.match(runtimeReadme, /Commit `conventions\/` and `templates\/`/);
+    assert.match(runtimeReadme, /`\.claude\/instructions\/`/);
+    assert.match(runtimeReadme, /`\.claude\/prompts\/`/);
     assert.ok(existsSync(join(dir, '.ai-workflow', 'runs', '.gitignore')));
   } finally {
     cleanup();
   }
 });
 
-test('the installed preset carries the routable workflow bodies', () => {
+test('the installed preset carries specialist capabilities, not workflow phases', () => {
   const { dir, cleanup } = project();
   try {
     install({ projectRoot: dir });
     const skills = join(dir, '.claude', 'skills');
+
     for (const skill of [
-      'work',
-      'feature-change',
-      'bug-fix',
-      'wf-quick-fix',
-      'wf-standard-change',
-      'wf-feature-change',
-      'solution-analysis',
-      'wf-solution-analysis',
-      'wf-feature-from-analysis',
-      'wf-bug-fix',
+      'root-cause-analysis',
+      'impact-analysis',
+      'feature-analysis',
+      'sql-compare',
+      'legacy-parity',
+      'schema-migration',
+      'api-contract-review',
+      'performance-investigation',
+      'map-repo',
+      'deep-change',
     ]) {
       assert.ok(existsSync(join(skills, skill, 'SKILL.md')), `${skill} installed`);
     }
-    // The entry points stay user-only; the bodies must be model-invocable, or
-    // /work cannot route to them.
-    const entry = readFileSync(join(skills, 'feature-change', 'SKILL.md'), 'utf8');
-    assert.ok(entry.includes('disable-model-invocation: true'));
-    assert.ok(entry.includes('wf-quick-fix'));
-    assert.ok(entry.includes('wf-standard-change'));
-    assert.ok(entry.includes('wf-feature-change'));
-    const body = readFileSync(join(skills, 'wf-feature-change', 'SKILL.md'), 'utf8');
-    assert.ok(!body.includes('disable-model-invocation'));
-    assert.ok(body.includes('user-invocable: false'));
-    const work = readFileSync(join(skills, 'work', 'SKILL.md'), 'utf8');
-    for (const body of ['wf-solution-analysis', 'wf-feature-from-analysis', 'wf-quick-fix', 'wf-standard-change', 'wf-bug-fix', 'wf-feature-change']) {
-      assert.ok(work.includes(body), `${body} is routable`);
+
+    // The v1 process framework is gone: a skill named after a workflow phase or
+    // a task category is exactly the thing that made ordinary tasks slow.
+    for (const gone of [
+      'work',
+      'quick-fix',
+      'standard-change',
+      'feature-change',
+      'bug-fix',
+      'solution-analysis',
+      'wf-quick-fix',
+      'wf-standard-change',
+      'wf-feature-change',
+      'wf-bug-fix',
+      'wf-implement',
+      'wf-checkpoint',
+      'wf-final-report',
+    ]) {
+      assert.equal(existsSync(join(skills, gone, 'SKILL.md')), false, `${gone} must not exist`);
+    }
+
+    // Capabilities load when the task needs them, so none may be model-blocked.
+    for (const skill of ['root-cause-analysis', 'sql-compare', 'impact-analysis']) {
+      const body = readFileSync(join(skills, skill, 'SKILL.md'), 'utf8');
+      assert.ok(!body.includes('disable-model-invocation'), `${skill} is auto-loadable`);
+      assert.ok(!body.includes('user-invocable: false'), `${skill} is also user-invocable`);
+    }
+
+    // Every escalation trigger in the rules names a skill that is installed.
+    const rules = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
+    for (const skill of ['root-cause-analysis', 'impact-analysis', 'sql-compare', 'deep-change']) {
+      assert.ok(rules.includes(skill), `${skill} is reachable from the rules`);
     }
   } finally {
     cleanup();
   }
 });
 
-test('report templates are complete, reusable, and preserved on update', () => {
+test('every analytical skill carries the depth contract, not generic advice', () => {
   const { dir, cleanup } = project();
   try {
     install({ projectRoot: dir });
-    const templates = join(dir, '.ai-workflow', 'templates');
-    const names = [
-      'bug-report.md',
-      'implementation-report.md',
-      'feature-report.md',
-      'impact-analysis.md',
-      'test-report.md',
-      'code-review-report.md',
-      'change-report.md',
-      'release-note.md',
-      'business-change-report.md',
-      'business-analysis.md',
-      'solution-options.md',
-      'recommended-solution.md',
-      'implementation-plan.md',
-      'test-strategy.md',
-      'spec-map.md',
-      'task-intake.md',
+    const skills = join(dir, '.claude', 'skills');
+
+    // `deep-change` is a safety capability, not a reasoning methodology, so it
+    // is deliberately exempt from the analytical contract.
+    const analytical = [
+      'root-cause-analysis',
+      'impact-analysis',
+      'feature-analysis',
+      'sql-compare',
+      'legacy-parity',
+      'schema-migration',
+      'api-contract-review',
+      'performance-investigation',
+      'map-repo',
     ];
-    for (const name of names) assert.ok(existsSync(join(templates, name)), `${name} installed`);
 
-    const headings = (name: string) =>
-      readFileSync(join(templates, name), 'utf8')
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith('## '));
-    assert.deepEqual(headings('bug-report.md'), [
-      '## 1. Summary', '## 2. Reproduction', '## 3. Current Flow', '## 4. Root Cause',
-      '## 5. Solution', '## 6. Changed Files', '## 7. Impact', '## 8. Verification',
-      '## 9. Manual Verification', '## 10. Regression Risk', '## 11. Remaining Issues',
-      '## 12. Conclusion',
-    ]);
-    assert.deepEqual(headings('implementation-report.md'), [
-      '## 1. Objective', '## 2. Scope', '## 3. Previous Behavior', '## 4. New Behavior',
-      '## 5. Technical Design', '## 6. Implementation Details', '## 7. Files Changed',
-      '## 8. Business Rules Affected', '## 9. Compatibility', '## 10. Verification',
-      '## 11. Risks', '## 12. Follow-up', '## 13. Final Status',
-    ]);
-    assert.deepEqual(headings('feature-report.md'), [
-      '## 1. Feature Summary', '## 2. Objective', '## 3. Scope', '## 4. Previous Behavior',
-      '## 5. New Behavior', '## 6. User Flow', '## 7. Business Rules',
-      '## 8. Technical Implementation', '## 9. Files Changed', '## 10. Impact',
-      '## 11. Compatibility', '## 12. Verification', '## 13. Risks',
-      '## 14. Follow-up', '## 15. Final Status',
-    ]);
-    assert.deepEqual(headings('impact-analysis.md'), [
-      '## 1. Requested Change', '## 2. Current Behavior', '## 3. Expected Behavior',
-      '## 4. Affected Areas', '## 5. Business Impact', '## 6. Technical Impact',
-      '## 7. Data Impact', '## 8. Compatibility', '## 9. Risks / Edge Cases',
-      '## 10. Recommended Implementation Scope', '## 11. Verification Strategy',
-      '## 12. Decision / Open Questions',
-    ]);
-    assert.deepEqual(headings('test-report.md'), [
-      '## 1. Change Under Test', '## 2. Test Scope', '## 3. Automated Checks',
-      '## 4. Functional Scenarios', '## 5. Regression Areas', '## 6. Not Tested',
-      '## 7. Manual Verification Required', '## 8. Final Assessment',
-    ]);
-    assert.deepEqual(headings('code-review-report.md'), [
-      '## 1. Scope Reviewed', '## 2. Summary', '## 3. Findings',
-      '## 4. Good Decisions', '## 5. Missing Verification', '## 6. Final Assessment',
-    ]);
-    assert.deepEqual(headings('change-report.md'), [
-      '## 1. Change Summary', '## 2. Reason for Change', '## 3. Previous Behavior',
-      '## 4. New Behavior', '## 5. User-visible Impact', '## 6. Business Impact',
-      '## 7. Technical Impact', '## 8. Data Impact', '## 9. Compatibility',
-      '## 10. Verification', '## 11. Manual Verification', '## 12. Risks',
-      '## 13. Follow-up', '## 14. Final Status',
-    ]);
-    assert.deepEqual(headings('release-note.md'), [
-      '## 1. Release Summary', '## 2. Changes Included', '## 3. Reason for Release',
-      '## 4. Upgrade / Data / Configuration Actions', '## 5. Compatibility',
-      '## 6. Verification', '## 7. Known Issues / Limitations',
-      '## 8. Rollout and Rollback Notes', '## 9. Release Status',
-    ]);
-    assert.deepEqual(headings('business-change-report.md'), [
-      '## 1. Bối cảnh', '## 2. Vấn đề trước thay đổi', '## 3. Thay đổi lần này',
-      '## 4. Luồng nghiệp vụ sau thay đổi', '## 5. Quy tắc áp dụng',
-      '## 6. Vai trò và quyền thao tác', '## 7. Các trường hợp đặc biệt',
-      '## 8. Ảnh hưởng tới dữ liệu cũ', '## 9. Những gì không thay đổi',
-      '## 10. Kịch bản BA/Test cần kiểm tra', '## 11. Lưu ý khi sử dụng',
-    ]);
+    for (const skill of analytical) {
+      const body = readFileSync(join(skills, skill, 'SKILL.md'), 'utf8');
+      // What vanilla reasoning misses — if this cannot be written, the skill is
+      // not carrying its weight.
+      assert.match(body, /## Why this skill exists/, `${skill} states its vanilla gap`);
+      // Guards against confident-but-wrong conclusions, written as `X != Y`.
+      assert.match(body, /must not reach/, `${skill} names its false conclusions`);
+      assert.match(body, /!=/, `${skill} spells out at least one false conclusion`);
+      // A bound, so investigation cannot run forever.
+      assert.match(body, /## Stop when/, `${skill} has a stop condition`);
+      // Auto-loadable and typeable: neither frontmatter switch may appear.
+      assert.ok(!body.includes('disable-model-invocation'), `${skill} is auto-loadable`);
+      assert.ok(!body.includes('user-invocable: false'), `${skill} is user-invocable`);
+    }
 
-    const testReport = readFileSync(join(templates, 'test-report.md'), 'utf8');
-    assert.ok(testReport.includes('## 6. Not Tested'));
-    assert.ok(testReport.includes('PASS WITH MANUAL VERIFICATION'));
+    // The gated path stays a safety capability: no analysis ceremony bolted on.
+    const gated = readFileSync(join(skills, 'deep-change', 'SKILL.md'), 'utf8');
+    assert.match(gated, /safety capability, not a reasoning methodology/);
+    assert.match(gated, /Do \*\*not\*\* use it for/, 'the trigger names what must not fire it');
 
-    const review = readFileSync(join(templates, 'code-review-report.md'), 'utf8');
+    // The reviewer classifies by evidence instead of emitting speculation.
+    const reviewer = readFileSync(join(dir, '.claude', 'agents', 'adversarial-reviewer.md'), 'utf8');
+    for (const level of ['CONFIRMED DEFECT', 'PLAUSIBLE RISK', 'UNVERIFIED ASSUMPTION']) {
+      assert.ok(reviewer.includes(level), `reviewer classifies ${level}`);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('output contracts are installed, load-on-demand, and preserved on update', () => {
+  const { dir, cleanup } = project();
+  try {
+    install({ projectRoot: dir });
+    const prompts = join(dir, '.claude', 'prompts');
+    const names = [
+      'README.md',
+      'change-report.prompt.md',
+      'bug-report.prompt.md',
+      'impact-report.prompt.md',
+      'test-report.prompt.md',
+      'review-report.prompt.md',
+      'analysis-report.prompt.md',
+      'parity-report.prompt.md',
+      'migration-plan.prompt.md',
+      'business-summary.prompt.md',
+      'decision-record.prompt.md',
+      'release-note.prompt.md',
+    ];
+    for (const name of names) assert.ok(existsSync(join(prompts, name)), `${name} installed`);
+
+    // The index is what makes selective loading possible: one read picks the
+    // contract, instead of every template shape sitting in context all session.
+    const index = readFileSync(join(prompts, 'README.md'), 'utf8');
+    for (const name of names.slice(1)) {
+      assert.ok(index.includes(name), `${name} is selectable from the index`);
+    }
+
+    // The vocabulary the rules promise has to exist where the report is written.
+    const review = readFileSync(join(prompts, 'review-report.prompt.md'), 'utf8');
     for (const value of ['P0 — Critical', 'P1 — High', 'P2 — Medium', 'P3 — Improvement']) {
       assert.ok(review.includes(value));
     }
     for (const value of ['READY', 'READY WITH FOLLOW-UP', 'NOT READY']) assert.ok(review.includes(value));
+    const testReport = readFileSync(join(prompts, 'test-report.prompt.md'), 'utf8');
+    assert.ok(testReport.includes('PASS WITH MANUAL VERIFICATION'));
+    assert.ok(testReport.includes('## Not verified'));
 
-    const customized = join(templates, 'bug-report.md');
-    writeFileSync(customized, '# Project Bug Report\n\nCustom section\n', 'utf8');
-    rmSync(join(templates, 'release-note.md'));
+    // A business deliverable must not leak implementation vocabulary.
+    const business = readFileSync(join(prompts, 'business-summary.prompt.md'), 'utf8');
+    assert.ok(business.includes('No class, method, controller, repository, SQL, file path'));
+
+    // Reports are the user's, not the kit's: a customized contract survives.
+    const customized = join(prompts, 'bug-report.prompt.md');
+    const projectOwned = '# Project bug report\n\nCustom section\n';
+    writeFileSync(customized, projectOwned, 'utf8');
+    rmSync(join(prompts, 'release-note.prompt.md'));
 
     install({ projectRoot: dir, mode: 'update' });
-    assert.equal(readFileSync(customized, 'utf8'), '# Project Bug Report\n\nCustom section\n');
-    assert.ok(existsSync(join(templates, 'release-note.md')), 'a deleted default is restored');
+    assert.equal(readFileSync(customized, 'utf8'), projectOwned);
+    assert.ok(existsSync(join(prompts, 'release-note.prompt.md')), 'a deleted default is restored');
   } finally {
     cleanup();
   }
@@ -344,16 +366,16 @@ test('no skill or rule depends on an external output-compression plugin', () => 
   try {
     install({ projectRoot: dir });
     const files = [join(dir, 'CLAUDE.md')];
-    for (const skill of ['wf-final-report', 'work', 'wf-feature-change', 'wf-bug-fix']) {
+    for (const skill of ['deep-change', 'root-cause-analysis', 'map-repo']) {
       files.push(join(dir, '.claude', 'skills', skill, 'SKILL.md'));
     }
     for (const file of files) {
       assert.ok(!readFileSync(file, 'utf8').includes('caveman'), `${file} must not depend on caveman`);
     }
     const rules = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
-    assert.ok(rules.includes('COMPRESS WORDING, NOT SUBSTANCE.'));
+    assert.ok(rules.includes('Do not narrate reading, searching, editing'));
     assert.ok(rules.includes('Verification is proportional to risk'));
-    assert.ok(rules.includes('Reporting mode is independent of task level'));
+    assert.ok(rules.includes('.claude/prompts/'));
   } finally {
     cleanup();
   }
@@ -372,22 +394,22 @@ test('doctor reports a healthy install and flags a missing one', async () => {
     assert.equal(byName.get('state schema')?.status, 'ok');
     assert.equal(byName.get('runtimeUrl')?.status, 'ok');
     assert.equal(byName.get('skills')?.status, 'ok');
-    assert.equal(byName.get('report templates')?.status, 'ok');
-    assert.equal(byName.get('analysis artifact templates')?.status, 'ok');
+    assert.equal(byName.get('output contracts')?.status, 'ok');
+    assert.equal(byName.get('instructions layer')?.status, 'ok');
     assert.equal(byName.get('solution-analysis workflow')?.status, 'ok');
     assert.equal(byName.get('analysis handoff config')?.status, 'ok');
     assert.equal(byName.get('managed file ownership')?.status, 'ok');
     assert.equal(byName.get('settings.json hooks')?.status, 'ok');
     assert.equal(byName.get('CLAUDE.md')?.status, 'ok');
     assert.equal(byName.get('semantic progress')?.status, 'ok');
-    assert.ok(byName.has('conventions'), 'the convention cache is inspected');
+    assert.ok(byName.has('repository instructions'), 'the scoped-knowledge layer is inspected');
     assert.ok(!after.some((c) => c.status === 'fail'));
   } finally {
     cleanup();
   }
 });
 
-test('update adds solution-analysis to a legacy project and preserves ambiguous files', () => {
+test('update restores deleted capabilities and preserves ambiguous files', () => {
   const { dir, cleanup } = project();
   try {
     install({ projectRoot: dir });
@@ -397,18 +419,17 @@ test('update adds solution-analysis to a legacy project and preserves ambiguous 
     delete legacy['fileHashes'];
     writeFileSync(legacyManifestFile, JSON.stringify(legacy, null, 2), 'utf8');
 
-    const work = join(dir, '.claude', 'skills', 'work', 'SKILL.md');
-    writeFileSync(work, '# Legacy project-owned work routing\n', 'utf8');
-    rmSync(join(dir, '.claude', 'skills', 'solution-analysis'), { recursive: true, force: true });
-    rmSync(join(dir, '.claude', 'skills', 'wf-solution-analysis'), { recursive: true, force: true });
-    rmSync(join(dir, '.ai-workflow', 'templates', 'recommended-solution.md'));
+    const customized = join(dir, '.claude', 'skills', 'root-cause-analysis', 'SKILL.md');
+    const projectOwned = '# Project-owned root cause method\n';
+    writeFileSync(customized, projectOwned, 'utf8');
+    rmSync(join(dir, '.claude', 'skills', 'sql-compare'), { recursive: true, force: true });
+    rmSync(join(dir, '.claude', 'prompts', 'parity-report.prompt.md'));
 
     const result = install({ projectRoot: dir, mode: 'update' });
-    assert.equal(readFileSync(work, 'utf8'), '# Legacy project-owned work routing\n');
-    assert.ok(result.conflicts.some((item) => item.includes('.claude/skills/work/SKILL.md')));
-    assert.ok(existsSync(join(dir, '.claude', 'skills', 'solution-analysis', 'SKILL.md')));
-    assert.ok(existsSync(join(dir, '.claude', 'skills', 'wf-solution-analysis', 'SKILL.md')));
-    assert.ok(existsSync(join(dir, '.ai-workflow', 'templates', 'recommended-solution.md')));
+    assert.equal(readFileSync(customized, 'utf8'), projectOwned);
+    assert.ok(result.conflicts.some((item) => item.includes('.claude/skills/root-cause-analysis/SKILL.md')));
+    assert.ok(existsSync(join(dir, '.claude', 'skills', 'sql-compare', 'SKILL.md')));
+    assert.ok(existsSync(join(dir, '.claude', 'prompts', 'parity-report.prompt.md')));
   } finally {
     cleanup();
   }
@@ -418,13 +439,13 @@ test('update preserves a hash-detected customized managed skill', () => {
   const { dir, cleanup } = project();
   try {
     install({ projectRoot: dir });
-    const skill = join(dir, '.claude', 'skills', 'wf-feature-change', 'SKILL.md');
+    const skill = join(dir, '.claude', 'skills', 'deep-change', 'SKILL.md');
     const custom = `${readFileSync(skill, 'utf8')}\nProject customization stays.\n`;
     writeFileSync(skill, custom, 'utf8');
 
     const result = install({ projectRoot: dir, mode: 'update' });
     assert.equal(readFileSync(skill, 'utf8'), custom);
-    assert.ok(result.conflicts.some((item) => item.includes('wf-feature-change')));
+    assert.ok(result.conflicts.some((item) => item.includes('deep-change')));
   } finally {
     cleanup();
   }
@@ -520,7 +541,7 @@ test('a custom runtime directory is discoverable by every entry point (PORT-01)'
     assert.ok(result.written.some((f) => f.endsWith(join('.claude', 'cw-runtime'))));
     assert.equal(readFileSync(join(dir, '.claude', 'cw-runtime'), 'utf8').trim(), '.wf');
     assert.equal(readJsonFile<{ runtimeDir: string }>(join(dir, '.wf', 'config.json'))?.runtimeDir, '.wf');
-    assert.ok(existsSync(join(dir, '.wf', 'templates', 'implementation-report.md')));
+    assert.ok(existsSync(join(dir, '.claude', 'prompts', 'change-report.prompt.md')));
 
     // No flags anywhere: the runtime, doctor and update all still find `.wf`.
     const runtime = new WorkflowRuntime({ projectRoot: dir });
@@ -528,26 +549,12 @@ test('a custom runtime directory is discoverable by every entry point (PORT-01)'
     const installedRules = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
     assert.match(installedRules, /<runtimeDir>.*\.claude\/cw-runtime/s);
     assert.ok(!installedRules.includes('`.ai-workflow/runs/'));
-    assert.ok(!installedRules.includes('`.ai-workflow/conventions/'));
 
-    for (const skill of [
-      'wf-feature-change',
-      'wf-bug-fix',
-      'wf-evidence-reconciliation',
-      'wf-bug-root-cause',
-      'wf-business-decision',
-      'wf-change-readiness',
-      'wf-validation-e2e',
-      'wf-product-assessment',
-      'wf-final-report',
-    ]) {
-      const instructions = readFileSync(
-        join(dir, '.claude', 'skills', skill, 'SKILL.md'),
-        'utf8',
-      );
-      assert.ok(instructions.includes('<runtimeDir>/runs/'), `${skill} uses the discovered runtime`);
-      assert.ok(!instructions.includes('`.ai-workflow/runs/'), `${skill} has no hardcoded run path`);
-    }
+    // Only the gated path writes into a run directory at all, and it must reach
+    // it through the discovered runtime rather than the default name.
+    const gated = readFileSync(join(dir, '.claude', 'skills', 'deep-change', 'SKILL.md'), 'utf8');
+    assert.ok(gated.includes('<runtimeDir>/runs/'), 'deep-change uses the discovered runtime');
+    assert.ok(!gated.includes('`.ai-workflow/runs/'), 'deep-change has no hardcoded run path');
 
     const controlled = runtime.startRun('feature-change', { label: 'custom runtime evidence' });
     runtime.enterPhase('evidence');

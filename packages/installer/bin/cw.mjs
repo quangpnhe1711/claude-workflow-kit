@@ -8,7 +8,13 @@ const argv = process.argv.slice(2);
 if (argv[0] === 'monitor') {
   const { mainMonitor } = await import('@claude-workflow-kit/monitor-server');
   await mainMonitor(argv.slice(1));
-} else if (argv[0] === 'doctor' || argv[0] === 'init' || argv[0] === 'update' || argv[0] === 'uninstall') {
+} else if (
+  argv[0] === 'doctor' ||
+  argv[0] === 'init' ||
+  argv[0] === 'update' ||
+  argv[0] === 'uninstall' ||
+  argv[0] === 'app'
+) {
   const { main } = await import('../dist/cli.js');
   await main(argv);
 } else {

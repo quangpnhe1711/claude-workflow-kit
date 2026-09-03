@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { artifactUrl, fetchRunDetail } from '../api';
+import { useProjectId } from '../project';
 import { elapsed, formatDuration } from '../derive';
 import { WorkflowGraph } from '../graph/WorkflowGraph';
 import { ActivityFeed } from '../panels/ActivityFeed';
@@ -32,6 +33,7 @@ function Metric({ label, value, title }: { label: string; value: string; title?:
  * the full event history) opens in place rather than on another page.
  */
 export function RunDetail({ runId, snapshot, nowMs }: Props) {
+  const projectId = useProjectId();
   const { selectedNodeId, sideTab, selectNode, setSideTab } = useMonitor();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +46,7 @@ export function RunDetail({ runId, snapshot, nowMs }: Props) {
   useEffect(() => {
     let cancelled = false;
     if (detail?.run.runId !== runId) setDetail(null);
-    fetchRunDetail(runId)
+    fetchRunDetail(projectId, runId)
       .then((next) => {
         if (!cancelled) {
           setDetail(next);
@@ -58,7 +60,7 @@ export function RunDetail({ runId, snapshot, nowMs }: Props) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId, version]);
+  }, [projectId, runId, version]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -74,7 +76,7 @@ export function RunDetail({ runId, snapshot, nowMs }: Props) {
   if (error) {
     return (
       <div className="screen__pad">
-        <a className="backlink" href={href({ name: 'runs' })}>
+        <a className="backlink" href={href({ name: 'runs', projectId })}>
           ← Runs
         </a>
         <div className="detail__error">{error}</div>
@@ -103,7 +105,7 @@ export function RunDetail({ runId, snapshot, nowMs }: Props) {
     <div className="rundetail">
       <header className="rundetail__head">
         <div className="rundetail__title">
-          <a className="backlink" href={href({ name: 'runs' })}>
+          <a className="backlink" href={href({ name: 'runs', projectId })}>
             ← Runs
           </a>
           <h1>
@@ -245,6 +247,7 @@ export function RunDetail({ runId, snapshot, nowMs }: Props) {
 
 /** Files, artifacts and outcome — the run's paper trail. */
 function RunContext({ detail }: { detail: Detail }) {
+  const projectId = useProjectId();
   const rollup = detail.rollup;
   const changed = rollup?.files.changedPaths ?? [];
   const read = rollup?.files.readPaths ?? [];
@@ -269,7 +272,7 @@ function RunContext({ detail }: { detail: Detail }) {
         <ul className="detail__list">
           {detail.artifacts.map((name) => (
             <li key={name}>
-              <a href={artifactUrl(detail.run.runId, name)} target="_blank" rel="noreferrer">
+              <a href={artifactUrl(projectId, detail.run.runId, name)} target="_blank" rel="noreferrer">
                 {name}
               </a>
             </li>

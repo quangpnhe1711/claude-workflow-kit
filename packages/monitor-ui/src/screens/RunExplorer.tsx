@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchRuns, type RunFilter } from '../api';
+import { useProjectId } from '../project';
 import { ago, formatDuration } from '../derive';
 import { href } from '../router';
 import type { RunIndexEntry, RunPage, Snapshot } from '../types';
@@ -17,6 +18,7 @@ const PAGE = 25;
  * opening this screen must not deserialise a thousand runs.
  */
 export function RunExplorer({ snapshot, nowMs }: Props) {
+  const projectId = useProjectId();
   const [filter, setFilter] = useState<RunFilter>({ limit: PAGE, offset: 0, sort: 'started' });
   const [page, setPage] = useState<RunPage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +31,7 @@ export function RunExplorer({ snapshot, nowMs }: Props) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchRuns(filter)
+    fetchRuns(projectId, filter)
       .then((next) => {
         if (cancelled) return;
         setPage(next);
@@ -44,7 +46,7 @@ export function RunExplorer({ snapshot, nowMs }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [filter, liveVersion]);
+  }, [projectId, filter, liveVersion]);
 
   const set = (patch: Partial<RunFilter>) => setFilter((current) => ({ ...current, offset: 0, ...patch }));
   const toggleStatus = (status: string) => {
@@ -177,10 +179,11 @@ export function RunExplorer({ snapshot, nowMs }: Props) {
 }
 
 function RunRow({ entry, nowMs }: { entry: RunIndexEntry; nowMs: number }) {
+  const projectId = useProjectId();
   return (
     <tr>
       <td>
-        <a className="table__link" href={href({ name: 'run', runId: entry.runId })}>
+        <a className="table__link" href={href({ name: 'run', projectId, runId: entry.runId })}>
           {entry.label ?? entry.runId}
         </a>
         <div className="mono dim">{entry.runId}</div>

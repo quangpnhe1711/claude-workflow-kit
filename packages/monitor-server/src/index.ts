@@ -5,7 +5,10 @@ import { createMonitorServer, type MonitorHandle, type MonitorOptions } from './
 
 export * from './snapshot.js';
 export * from './actions.js';
-export { createMonitorServer } from './server.js';
+export * from './http.js';
+export * from './runtime-routes.js';
+export * from './project-summary.js';
+export { createMonitorServer, createStaticHandler } from './server.js';
 export type { MonitorOptions, MonitorHandle } from './server.js';
 
 /** Locate the built monitor UI, if the package is installed alongside. */

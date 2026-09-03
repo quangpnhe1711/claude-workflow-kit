@@ -352,9 +352,12 @@ test('the board offers only the actions the state supports', () => {
   }
 });
 
-test('every task type resolves to a report template that the preset ships', () => {
-  assert.equal(outputTemplateFor('text-label'), 'text-label.md');
-  assert.equal(outputTemplateFor('permission'), 'permission-report.md');
-  assert.equal(outputTemplateFor('research'), 'research-report.md');
-  assert.equal(outputTemplateFor('devops'), 'implementation-report.md', 'unmapped types fall back, never crash');
+test('every task type resolves to an output contract that the preset ships', () => {
+  assert.equal(outputTemplateFor('bug-fix'), 'bug-report.prompt.md');
+  assert.equal(outputTemplateFor('research'), 'analysis-report.prompt.md');
+  assert.equal(outputTemplateFor('migration'), 'migration-plan.prompt.md');
+  // Most task types share one contract; a CSS tweak and a cache change are both
+  // "what changed", so only the genuinely different shapes get their own file.
+  assert.equal(outputTemplateFor('text-label'), 'change-report.prompt.md');
+  assert.equal(outputTemplateFor('devops'), 'change-report.prompt.md', 'unmapped types fall back, never crash');
 });

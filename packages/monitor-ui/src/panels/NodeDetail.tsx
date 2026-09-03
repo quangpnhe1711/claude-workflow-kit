@@ -1,4 +1,5 @@
 import { artifactUrl } from '../api';
+import { useProjectId } from '../project';
 import { clock, elapsed, nodeStatusView } from '../derive';
 import type { RunDetail, RunView, WorkflowDefinition } from '../types';
 
@@ -13,6 +14,7 @@ interface Props {
 
 /** The Phase tab: what one node of the diagram did, and what it left behind. */
 export function NodeDetail({ workflow, run, detail, nodeId, nowMs, stallThresholdSeconds }: Props) {
+  const projectId = useProjectId();
   const node = workflow.nodes.find((n) => n.id === nodeId);
   if (!node) return <div className="empty">Click a phase in the diagram to inspect it.</div>;
 
@@ -151,7 +153,7 @@ export function NodeDetail({ workflow, run, detail, nodeId, nowMs, stallThreshol
             {artifacts.map((artifact) => (
               <li key={artifact.name}>
                 {artifact.present ? (
-                  <a href={artifactUrl(run.runId, artifact.name)} target="_blank" rel="noreferrer">
+                  <a href={artifactUrl(projectId, run.runId, artifact.name)} target="_blank" rel="noreferrer">
                     {artifact.name}
                   </a>
                 ) : (

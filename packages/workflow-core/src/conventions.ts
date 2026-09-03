@@ -1,17 +1,25 @@
 /**
- * Convention cache inspection — deliberately small.
+ * Scoped-instruction freshness — deliberately small.
  *
- * Discovering and writing conventions stays a Claude job (`refresh-conventions`,
- * `wf-convention-manager`). The only thing code owns is the question those
- * skills cannot answer honestly about themselves: *is the cache still valid?*
- * That is a filesystem fact — file present, evidence file still there, evidence
- * changed since the last refresh — so it is computed, not asserted.
+ * Writing `.claude/instructions/<area>.instructions.md` stays a Claude job
+ * (`/map-repo`). The only thing code owns is the question that skill cannot
+ * answer honestly about itself: *is this still true?* That is a filesystem fact
+ * — file present, evidence file still there, evidence changed since the last
+ * refresh — so it is computed, not asserted.
+ *
+ * Areas are open. A repository has the areas it has: `database` and `api` in one,
+ * `billing` and `reporting` in another. They are discovered from metadata.json
+ * and from the files on disk, never from a fixed list.
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import type { RuntimePaths } from './store.js';
 
-export const CONVENTION_AREAS = ['code', 'comments', 'testing', 'database'] as const;
+/** Suffix that marks a scoped instruction file. */
+export const INSTRUCTION_SUFFIX = '.instructions.md';
+
+/** Keys in metadata.json that describe the repository rather than an area. */
+const NON_AREA_KEYS = new Set(['repo_shape', 'areas']);
 
 /**
  * `last_refresh` is recorded at millisecond resolution while filesystem mtimes
@@ -19,7 +27,7 @@ export const CONVENTION_AREAS = ['code', 'comments', 'testing', 'database'] as c
  * One second of slack removes that false "stale" without hiding a real edit.
  */
 const MTIME_SLACK_MS = 1000;
-export type ConventionArea = (typeof CONVENTION_AREAS)[number];
+export type ConventionArea = string;
 
 export type ConventionAreaStatus = 'OK' | 'MISSING' | 'STALE' | 'UNRECORDED' | 'INVALID';
 
@@ -48,7 +56,7 @@ export interface ConventionReport {
   metadataReadable: boolean;
   repoShape?: unknown;
   areas: ConventionAreaReport[];
-  /** Areas that need `/refresh-conventions <area>`. */
+  /** Areas that need `/map-repo <area>`. */
   refreshNeeded: ConventionArea[];
 }
 
@@ -106,8 +114,35 @@ function evidenceList(meta: AreaMetadata): string[] {
   return meta.evidence.filter((e): e is string => typeof e === 'string' && e.length > 0);
 }
 
+/**
+ * Areas this repository actually has: every area recorded in metadata.json plus
+ * every `<area>.instructions.md` on disk. A file with no metadata still has to be
+ * reported — an unverifiable instruction is exactly the thing worth flagging.
+ */
+function discoverAreas(dir: string, metadata: Record<string, unknown> | undefined): string[] {
+  const areas = new Set<string>();
+  for (const [key, value] of Object.entries(metadata ?? {})) {
+    if (NON_AREA_KEYS.has(key)) continue;
+    if (value && typeof value === 'object') areas.add(key);
+  }
+  const nested = metadata?.['areas'];
+  if (nested && typeof nested === 'object') {
+    for (const key of Object.keys(nested as Record<string, unknown>)) areas.add(key);
+  }
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith(INSTRUCTION_SUFFIX)) {
+        areas.add(entry.name.slice(0, -INSTRUCTION_SUFFIX.length));
+      }
+    }
+  } catch {
+    // directory absent — nothing mapped yet
+  }
+  return [...areas].sort();
+}
+
 export function inspectConventions(paths: RuntimePaths): ConventionReport {
-  const dir = paths.conventionsDir;
+  const dir = paths.instructionsDir;
   const metadataFile = join(dir, 'metadata.json');
 
   let metadata: Record<string, unknown> | undefined;
@@ -122,8 +157,8 @@ export function inspectConventions(paths: RuntimePaths): ConventionReport {
     }
   }
 
-  const areas: ConventionAreaReport[] = CONVENTION_AREAS.map((area) => {
-    const file = join(dir, `${area}.md`);
+  const areas: ConventionAreaReport[] = discoverAreas(dir, metadata).map((area) => {
+    const file = join(dir, `${area}${INSTRUCTION_SUFFIX}`);
     const meta = areaMetadata(metadata, area);
     const evidence = evidenceList(meta);
     const missingEvidence: string[] = [];
@@ -142,7 +177,7 @@ export function inspectConventions(paths: RuntimePaths): ConventionReport {
 
     if (!existsSync(file)) {
       report.status = 'MISSING';
-      report.detail = 'no cached convention — run /refresh-conventions';
+      report.detail = 'recorded in metadata.json but the file is gone — run /map-repo';
       return report;
     }
 
@@ -219,8 +254,9 @@ export function formatConventionReport(report: ConventionReport): string {
     UNRECORDED: '?',
     INVALID: '✕',
   };
-  const lines: string[] = [`conventions  ${report.conventionsDir}`];
-  if (!report.metadataPresent) lines.push('metadata     missing — run /refresh-conventions');
+  const lines: string[] = [`instructions  ${report.conventionsDir}`];
+  if (!report.areas.length) lines.push('no areas mapped yet — run /map-repo <area> when knowledge is worth persisting');
+  else if (!report.metadataPresent) lines.push('metadata     missing — run /map-repo');
   else if (!report.metadataReadable) lines.push(`metadata     unreadable at ${report.metadataFile}`);
 
   for (const area of report.areas) {
@@ -230,11 +266,11 @@ export function formatConventionReport(report: ConventionReport): string {
 
   lines.push(
     report.refreshNeeded.length
-      ? `\nrefresh needed: /refresh-conventions ${report.refreshNeeded.join(' ')}`
-      : '\nall cached areas valid — reuse them, do not rescan the repository',
+      ? `\nrefresh needed: /map-repo ${report.refreshNeeded.join(' ')}`
+      : '\nevery mapped area is verified — read the one that covers what you are touching',
   );
   lines.push(
-    'precedence: local intentional convention near the touched code > this cache > generic external skill',
+    'precedence: local intentional convention near the touched code > these files > generic default',
   );
   return lines.join('\n');
 }

@@ -13,6 +13,18 @@ how strongly it holds. Three strengths:
 | **derived** | code computes the requirement, so it cannot drift per task |
 | **instructed** | prose in `CLAUDE.md` or a skill; the model can still ignore it |
 
+> **Status (2026-08-31): historical, and partly superseded.** The V2 spec asked
+> for an agent that classifies every task before acting. That turned out to cost
+> latency on ordinary work without improving the result, so the `senior-dev`
+> preset no longer does it — see the capability architecture note in
+> `docs/architecture.md` and decisions D42-D47. Every row below marked
+> **enforced** or **derived** is still true: the router, thresholds, checkpoints,
+> monitors and board are runtime code and still behave exactly as described, and
+> are what a project gets when it drives a multi-phase topology deliberately.
+> The rows marked **instructed** described preset prose that no longer exists —
+> `skills/work`, the Mission Header, the `wf-*` phase skills — and are the part
+> that was replaced.
+
 ## Section map
 
 | Spec | Implementation | Strength |

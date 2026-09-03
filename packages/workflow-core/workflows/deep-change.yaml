@@ -1,0 +1,92 @@
+id: deep-change
+label: Deep Change
+description: >-
+  The one gated path, for a change that cannot be undone by reverting code:
+  production data, a destructive migration, authentication or authorization,
+  money, or a contract with consumers outside this repository. One hard gate
+  holds every edit until the decision behind the change is recorded and — when
+  it is a real product or risk choice — answered by the user. Then implement,
+  verify, and review adversarially against the diff.
+
+nodes:
+  - id: prompt
+    label: User Prompt
+    kind: start
+    description: A change whose blast radius is irreversible.
+
+  - id: investigate
+    label: Investigate
+    skill: deep-change
+    description: >-
+      Establish only what the decision needs: what cannot be undone and what
+      recovery costs, who depends on the current behavior, which part is a
+      product choice, the deploy order, and how it will be verified.
+
+  - id: decide
+    label: Decision
+    skill: deep-change
+    gate: DECISION_READY
+    artifact: decision.md
+    description: >-
+      Record the decision, what is irreversible, the impact, the chosen
+      approach and why, the deploy order and the verification plan. Pass the
+      gate when evidence settles it; wait on it when the user must choose.
+
+  - id: await-decision
+    label: Waiting For User
+    kind: waiting
+    gate: DECISION_READY
+    description: A real product or risk decision is open. Waiting for the user's answer.
+
+  - id: implement
+    label: Implement
+    implementation: true
+    skill: deep-change
+    description: Smallest change that carries out the recorded decision, inside the approved scope.
+
+  - id: verify
+    label: Verify
+    skill: deep-change
+    description: >-
+      Evidence biased toward the failure mode this change creates — migration
+      verification queries, old-shape contract tests, permission negative cases,
+      the parity corpus.
+
+  - id: review
+    label: Adversarial Review
+    agent: adversarial-reviewer
+    artifact: review.md
+    description: Independent review of the diff and the recorded decision. Max 3 fix loops.
+
+  - id: done
+    label: Done
+    kind: end
+
+edges:
+  - from: prompt
+    to: investigate
+  - from: investigate
+    to: decide
+  - from: decide
+    to: await-decision
+    when: "!DECISION_READY"
+    label: open decision
+  - from: await-decision
+    to: decide
+    label: answered
+  - from: decide
+    to: implement
+    when: DECISION_READY
+    label: decided
+  - from: implement
+    to: verify
+  - from: verify
+    to: implement
+    label: failure
+  - from: verify
+    to: review
+  - from: review
+    to: implement
+    label: findings
+  - from: review
+    to: done

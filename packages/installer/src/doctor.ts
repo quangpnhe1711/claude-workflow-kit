@@ -13,6 +13,7 @@ import {
   type KitConfig,
   type RunState,
 } from '@claude-workflow-kit/workflow-core';
+import { claudeAvailable } from '@claude-workflow-kit/app-server';
 import { isKitHookCommand, readJsonFile, type SettingsLike } from './merge.js';
 import { kitVersion, loadPreset } from './paths.js';
 
@@ -151,35 +152,26 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
           : 'installed skills match the framework package',
       );
 
-      const missingTemplates = (preset.templates ?? []).filter(
-        (t) => !existsSync(join(runtimeDir, 'templates', t)),
+      const missingPrompts = (preset.prompts ?? []).filter(
+        (name) => !existsSync(join(projectRoot, '.claude', 'prompts', name)),
       );
       add(
-        'report templates',
-        missingTemplates.length ? 'warn' : 'ok',
-        missingTemplates.length
-          ? `${(preset.templates ?? []).length - missingTemplates.length}/${(preset.templates ?? []).length} installed; missing: ${missingTemplates.join(', ')}`
-          : `${(preset.templates ?? []).length} installed`,
+        'output contracts',
+        missingPrompts.length ? 'warn' : 'ok',
+        missingPrompts.length
+          ? `${(preset.prompts ?? []).length - missingPrompts.length}/${(preset.prompts ?? []).length} installed; missing: ${missingPrompts.join(', ')}`
+          : `${(preset.prompts ?? []).length} installed`,
       );
 
-      const analysisTemplates = [
-        'business-analysis.md',
-        'impact-analysis.md',
-        'solution-options.md',
-        'recommended-solution.md',
-        'implementation-plan.md',
-        'test-strategy.md',
-        'spec-map.md',
-      ];
-      const missingAnalysisTemplates = analysisTemplates.filter(
-        (name) => !existsSync(join(runtimeDir, 'templates', name)),
+      const missingInstructions = (preset.instructions ?? []).filter(
+        (name) => !existsSync(join(projectRoot, '.claude', 'instructions', name)),
       );
       add(
-        'analysis artifact templates',
-        missingAnalysisTemplates.length ? 'warn' : 'ok',
-        missingAnalysisTemplates.length
-          ? `missing: ${missingAnalysisTemplates.join(', ')} — run claude-workflow-kit update; existing templates will be preserved`
-          : 'seven-file solution-analysis contract available',
+        'instructions layer',
+        missingInstructions.length ? 'warn' : 'ok',
+        missingInstructions.length
+          ? `missing: ${missingInstructions.join(', ')} — run claude-workflow-kit update`
+          : 'contract installed; content comes from /map-repo',
       );
 
       const missingAgents = preset.agents.filter(
@@ -335,14 +327,18 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
         : 'phases track runtime activity',
     );
 
-    // --- convention cache ---
-    const conventions = runtime.conventions();
+    // --- scoped repository knowledge ---
+    // An empty layer is fine: a repository with nothing worth persisting yet is
+    // healthier than one carrying instruction files nobody verified.
+    const instructions = runtime.conventions();
     add(
-      'conventions',
-      conventions.refreshNeeded.length ? 'warn' : 'ok',
-      conventions.refreshNeeded.length
-        ? `refresh needed: ${conventions.refreshNeeded.join(', ')} (cw conventions status)`
-        : `${conventions.areas.length} areas cached and verified`,
+      'repository instructions',
+      instructions.refreshNeeded.length ? 'warn' : 'ok',
+      instructions.refreshNeeded.length
+        ? `stale or unverifiable: ${instructions.refreshNeeded.join(', ')} (cw instructions status)`
+        : instructions.areas.length
+          ? `${instructions.areas.length} area(s) mapped and verified`
+          : 'no areas mapped yet (/map-repo <area> when knowledge is worth persisting)',
     );
   } catch (error) {
     add('runs', 'warn', (error as Error).message);
@@ -368,6 +364,18 @@ export async function doctor(options: DoctorOptions): Promise<Check[]> {
   } catch {
     add('monitor', 'warn', `not running at ${monitorUrl} (start it with: cw monitor)`);
   }
+
+  // --- Claude Code itself ---
+  // Only the app needs to *start* Claude Code; a terminal user already has it.
+  // So this is a warning, not a failure: an installation is healthy without it.
+  const claude = claudeAvailable();
+  add(
+    'claude code',
+    claude.ok ? 'ok' : 'warn',
+    claude.ok
+      ? `${claude.bin} ${claude.detail}`
+      : `"${claude.bin}" is not runnable (${claude.detail}); \`cw app\` cannot start tasks`,
+  );
 
   return checks;
 }

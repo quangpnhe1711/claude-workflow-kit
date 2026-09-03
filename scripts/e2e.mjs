@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -27,6 +28,7 @@ const kitBin = join(repoRoot, 'packages', 'installer', 'bin', 'claude-workflow-k
 
 const project = mkdtempSync(join(tmpdir(), 'cwk-e2e-'));
 let monitor;
+let app;
 let failed = false;
 
 const steps = [];
@@ -92,51 +94,48 @@ step('install into a clean project copy', () => {
   const result = run(kitBin, ['init', '--project', project]);
   assert.match(result.stdout, /Installed preset "senior-dev"/);
 
-  assert.ok(existsSync(join(project, '.claude', 'skills', 'feature-change', 'SKILL.md')));
-  assert.ok(existsSync(join(project, '.claude', 'skills', 'wf-standard-change', 'SKILL.md')));
+  assert.ok(existsSync(join(project, '.claude', 'skills', 'root-cause-analysis', 'SKILL.md')));
+  assert.ok(existsSync(join(project, '.claude', 'skills', 'deep-change', 'SKILL.md')));
   assert.ok(existsSync(join(project, '.claude', 'hooks', 'cw-hook.mjs')));
   assert.ok(existsSync(join(project, '.ai-workflow', 'config.json')));
-  assert.ok(existsSync(join(project, '.ai-workflow', 'templates', 'implementation-report.md')));
 
-  // Mission Control ships with the preset: its two skills and the templates the
-  // router can select. A missing template makes `cw mission template` a dead end.
-  for (const skill of ['wf-mission-board', 'wf-checkpoint']) {
+  // Capabilities load when a task needs them; output contracts only when the
+  // user asks for a document. Both layers have to be on disk for that to work.
+  for (const skill of ['sql-compare', 'schema-migration', 'api-contract-review', 'map-repo']) {
     assert.ok(existsSync(join(project, '.claude', 'skills', skill, 'SKILL.md')), `${skill} installed`);
   }
-  for (const template of [
-    'text-label.md',
-    'ui-change.md',
-    'css-layout.md',
-    'permission-report.md',
-    'research-report.md',
-    'architecture-report.md',
-    'refactor-report.md',
-    'documentation-report.md',
-    'execution-plan.md',
-    'decision-record.md',
+  for (const prompt of [
+    'README.md',
+    'change-report.prompt.md',
+    'bug-report.prompt.md',
+    'parity-report.prompt.md',
+    'migration-plan.prompt.md',
+    'business-summary.prompt.md',
+    'decision-record.prompt.md',
   ]) {
     assert.ok(
-      existsSync(join(project, '.ai-workflow', 'templates', template)),
-      `template ${template} installed`,
+      existsSync(join(project, '.claude', 'prompts', prompt)),
+      `output contract ${prompt} installed`,
     );
   }
+  assert.ok(existsSync(join(project, '.claude', 'instructions', 'README.md')));
 
   const claudeMd = readFileSync(join(project, 'CLAUDE.md'), 'utf8');
-  assert.ok(claudeMd.includes('### Mission Control'), 'the V2 rules are in the managed block');
-  assert.ok(claudeMd.includes('cw checkpoint open'), 'checkpoint protocol is in the rules');
+  assert.ok(claudeMd.includes('### Escalation triggers'), 'the capability router is in the managed block');
+  assert.ok(claudeMd.includes('### Depth is chosen by three facts'), 'depth model injected');
   assert.ok(claudeMd.includes('This line exists to prove the installer merges'), 'user content survived');
-  assert.ok(claudeMd.includes('NO BUSINESS DECISION = NO CODING in an L3 run.'), 'managed block injected');
 
-  // The output policy must stand on its own: no external plugin dependency.
+  // The default path must stay native: no classification step, no mandatory run.
+  assert.ok(!claudeMd.includes('Mission Header'), 'ordinary work opens no ceremony');
   assert.ok(!claudeMd.includes('caveman'), 'no dependency on an external compression plugin');
-  assert.ok(claudeMd.includes('COMPRESS WORDING, NOT SUBSTANCE.'), 'built-in policy present');
+  assert.ok(claudeMd.includes('Do not narrate reading, searching, editing'), 'built-in policy present');
 
-  // Routing target for /work must be model-invocable.
-  const workflowBody = readFileSync(
-    join(project, '.claude', 'skills', 'wf-feature-change', 'SKILL.md'),
+  // Capabilities have to be auto-loadable, or the escalation table is decorative.
+  const capability = readFileSync(
+    join(project, '.claude', 'skills', 'root-cause-analysis', 'SKILL.md'),
     'utf8',
   );
-  assert.ok(!workflowBody.includes('disable-model-invocation'), '/work can reach the workflow body');
+  assert.ok(!capability.includes('disable-model-invocation'), 'a capability loads when it is needed');
 });
 
 step('a session that only starts leaves no run behind', () => {
@@ -949,15 +948,20 @@ step('doctor passes on a live install', () => {
   const failures = checks.filter((c) => c.status === 'fail');
   assert.deepEqual(failures, [], `doctor reported failures: ${JSON.stringify(failures)}`);
   assert.ok(checks.some((c) => c.name === 'semantic progress'));
-  assert.ok(checks.some((c) => c.name === 'conventions'));
+  assert.ok(checks.some((c) => c.name === 'repository instructions'));
   assert.ok(!existsSync(join(project, '.ai-workflow', 'hook-errors.log')), 'no hook errors all run');
 });
 
-step('conventions status reports an un-bootstrapped cache', () => {
-  const result = run(cwBin, ['--project', project, 'conventions', 'status', '--json']);
+step('instructions status reports an unmapped repository without inventing areas', () => {
+  const result = run(cwBin, ['--project', project, 'instructions', 'status', '--json']);
   const report = JSON.parse(result.stdout);
-  assert.deepEqual(report.refreshNeeded, ['code', 'comments', 'testing', 'database']);
-  assert.equal(report.areas.length, 4);
+  // A repository nobody has mapped has no areas — not four failing ones.
+  assert.deepEqual(report.areas, []);
+  assert.deepEqual(report.refreshNeeded, []);
+
+  // The pre-0.2 command name still answers, so an installed project is not broken.
+  const legacy = run(cwBin, ['--project', project, 'conventions', 'status', '--json']);
+  assert.deepEqual(JSON.parse(legacy.stdout).areas, []);
 });
 
 step('the gate cannot be escaped by retiring the run', () => {
@@ -1109,13 +1113,9 @@ step('17. a project installed with --runtime <dir> enforces its gates too', asyn
 
 // --- quick-fix: the short workflow ----------------------------------------
 
-step('quick-fix is installed and stays short', () => {
-  for (const skill of ['quick-fix', 'wf-quick-fix']) {
-    assert.ok(
-      existsSync(join(project, '.claude', 'skills', skill, 'SKILL.md')),
-      `${skill} must be installed`,
-    );
-  }
+step('quick-fix stays short and carries no gate', () => {
+  // The preset no longer drives this topology — ordinary work runs natively —
+  // but it stays available to projects that opt into it explicitly.
   assert.match(cw('workflows').stdout, /quick-fix/);
 
   // Superseding whatever the previous steps left behind is deliberate here.
@@ -1163,6 +1163,55 @@ step('standard-change is installed as the gate-free L2 path', () => {
   cw('run', 'complete');
 });
 
+// --- deep-change: the one gated path --------------------------------------
+
+step('deep-change holds every edit behind one decision, then releases it', () => {
+  assert.match(cw('workflows').stdout, /deep-change/);
+  cw('run', 'start', 'deep-change', '--force', '--reason', 'e2e gated path probe', '--label', 'drop legacy column');
+  const opened = state();
+  assert.equal(opened.workflow, 'deep-change');
+  assert.equal(opened.gates.DECISION_READY, 'OPEN');
+
+  const sourceEdit = {
+    hook_event_name: 'PreToolUse',
+    session_id: 's1',
+    tool_name: 'Edit',
+    tool_input: { file_path: join(project, 'src', 'orders.js') },
+  };
+  assert.equal(hookDecision(sourceEdit).decision, 'deny', 'an irreversible change waits for its decision');
+
+  cw('phase', 'enter', 'investigate');
+  cw('phase', 'complete');
+  cw('phase', 'enter', 'decide');
+
+  // The gate's own evidence stays writable behind it — that is how it is earned.
+  const decisionFile = join(project, '.ai-workflow', 'runs', opened.runId, 'decision.md');
+  assert.equal(
+    hookDecision({ ...sourceEdit, tool_name: 'Write', tool_input: { file_path: decisionFile } }).decision,
+    'allow',
+    'the decision record is the way through the gate',
+  );
+  writeArtifact('decision.md', '# Decision\n\nExpand/contract; drop deferred to the next release.\n');
+  cw('artifact', 'decision.md');
+  cw('gate', 'pass', 'DECISION_READY');
+
+  assert.equal(hookDecision(sourceEdit).decision, 'allow', 'a decided change may be implemented');
+
+  for (const phase of ['implement', 'verify']) {
+    cw('phase', 'enter', phase);
+    cw('phase', 'complete');
+  }
+  cw('phase', 'enter', 'review');
+  writeArtifact('review.md', '# Review\n\nPASS\n');
+  cw('artifact', 'review.md');
+  cw('phase', 'complete');
+  cw('run', 'complete');
+
+  const finished = JSON.parse(cw('run', 'show', '--run', opened.runId, '--json').stdout);
+  assert.equal(finished.status, 'COMPLETED');
+  assert.equal(finished.currentNode, 'done');
+});
+
 // --- mission control (V2) -------------------------------------------------
 
 step('a classified mission routes, checkpoints and blocks the editor', () => {
@@ -1181,7 +1230,7 @@ step('a classified mission routes, checkpoints and blocks the editor', () => {
   ).stdout;
   assert.match(classified, /workflow\s+STANDARD \(standard-change\)/);
   assert.match(classified, /checkpoints PLAN, DESIGN/);
-  assert.match(classified, /template\s+implementation-report\.md/);
+  assert.match(classified, /template\s+change-report\.prompt\.md/);
   assert.equal(state().mission.state, 'PLANNING');
 
   cw(
@@ -1351,6 +1400,128 @@ step('confidence thresholds gate the implementation phase, and are auditable', (
   assert.ok(!existsSync(join(project, '.ai-workflow', 'current-run')));
 });
 
+// --- the app: many projects, GUI provisioning, and starting a session --------
+
+step('the app serves the project, its config and a launched session', async () => {
+  const { startApp } = await import(
+    pathToFileURL(join(repoRoot, 'packages', 'installer', 'dist', 'app.js')).href
+  );
+
+  // A workspace of its own, so the developer's real registry is never touched,
+  // and a stand-in for Claude Code, so the launcher is exercised without needing
+  // a real session (or a real API key) in CI.
+  const home = mkdtempSync(join(tmpdir(), 'cwk-e2e-home-'));
+  const fake = join(home, 'fake-claude.mjs');
+  const NL = String.fromCharCode(10);
+  writeFileSync(
+    fake,
+    [
+      "import { readFileSync } from 'node:fs';",
+      "const NL = String.fromCharCode(10);",
+      "if (process.argv.includes('--version')) { process.stdout.write('0.0.0-e2e' + NL); process.exit(0); }",
+      "let prompt = '';",
+      "try { prompt = readFileSync(0, 'utf8'); } catch {}",
+      "process.stdout.write(JSON.stringify({ type: 'user', prompt: prompt.trim() }) + NL);",
+      "process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success' }) + NL);",
+    ].join(NL),
+    'utf8',
+  );
+  let bin = fake;
+  if (process.platform === 'win32') {
+    bin = join(home, 'fake-claude.cmd');
+    writeFileSync(bin, `@node "${fake}" %*${NL}`, 'utf8');
+  } else {
+    chmodSync(fake, 0o755);
+  }
+  process.env.CW_HOME = home;
+  process.env.CW_CLAUDE_BIN = bin;
+
+  app = startApp({ port: 0, workspaceFile: join(home, 'workspace.json'), add: [project] });
+  await app.ready;
+
+  const json = async (path, init) => {
+    const res = await fetch(`${app.url}${path}`, init);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`${path} -> ${res.status}: ${body.error ?? ''}`);
+    return body;
+  };
+
+  // The registry sees the project, and the CLI's installer is attached.
+  const info = await json('/api/app');
+  assert.equal(info.projects.length, 1, 'the project was registered by --add');
+  assert.equal(info.capabilities.provisioning, true, 'the CLI injects install/doctor');
+  assert.equal(info.capabilities.launcher, true, 'the stand-in binary is runnable');
+  const projectId = info.projects[0].id;
+  assert.equal(info.projects[0].installed, true);
+  assert.ok(info.projects[0].totalRuns > 0, 'the runs from earlier steps are visible');
+
+  // The same runtime routes the monitor serves, under the project prefix.
+  const snapshot = await json(`/api/projects/${projectId}/state`);
+  assert.equal(snapshot.projectRoot, project);
+  const history = await json(`/api/projects/${projectId}/runs?limit=5`);
+  assert.ok(history.total > 0, 'history is answered from the index');
+
+  // Provisioning through the app, not the terminal.
+  const health = await json(`/api/projects/${projectId}/doctor`);
+  assert.ok(health.checks.some((c) => c.name === 'skills' && c.status === 'ok'), 'doctor ran');
+
+  // Config edits are whitelisted and merged, never wholesale rewrites.
+  const before = JSON.parse(readFileSync(join(project, '.ai-workflow', 'config.json'), 'utf8'));
+  const patched = await json(`/api/projects/${projectId}/config`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ stallThresholdSeconds: 321 }),
+  });
+  assert.equal(patched.config.stallThresholdSeconds, 321);
+  const after = JSON.parse(readFileSync(join(project, '.ai-workflow', 'config.json'), 'utf8'));
+  assert.equal(after.preset, before.preset, 'the unmanaged keys survive');
+  await assert.rejects(
+    json(`/api/projects/${projectId}/config`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mutationTools: [] }),
+    }),
+    /not editable/,
+    'gate policy cannot be widened from a browser form',
+  );
+
+  // A session started from the app: default mode cannot edit, and the prompt
+  // travels over stdin rather than argv.
+  await assert.rejects(
+    json(`/api/projects/${projectId}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: 'rewrite everything', mode: 'bypassPermissions' }),
+    }),
+    /confirmUnsafe/,
+    'an edit-capable mode must be confirmed',
+  );
+
+  const started = await json(`/api/projects/${projectId}/tasks`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: 'explain the order module' }),
+  });
+  assert.equal(started.task.mode, 'plan', 'the default mode is read-only');
+
+  const deadline = Date.now() + 20_000;
+  let task = started.task;
+  while (task.status === 'RUNNING' && Date.now() < deadline) {
+    await new Promise((done) => setTimeout(done, 100));
+    task = (await json(`/api/projects/${projectId}/tasks/${task.id}`)).task;
+  }
+  assert.equal(task.status, 'DONE', `the session finished (${task.error ?? ''})`);
+
+  const output = await json(`/api/projects/${projectId}/tasks/${task.id}/output`);
+  assert.match(output.text, /explain the order module/, 'the prompt reached the session over stdin');
+
+  await app.close();
+  app = undefined;
+  delete process.env.CW_CLAUDE_BIN;
+  delete process.env.CW_HOME;
+  rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+});
+
 step('uninstall leaves the project clean', () => {
   run(kitBin, ['uninstall', '--project', project]);
   assert.ok(!existsSync(join(project, '.claude', 'skills', 'feature-change', 'SKILL.md')));
@@ -1375,6 +1546,7 @@ for (const [name, fn] of steps) {
 }
 
 if (monitor) await monitor.close();
+if (app) await app.close();
 rmSync(project, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 
 process.stdout.write(failed ? '\nE2E FAILED\n' : '\nE2E PASSED\n');

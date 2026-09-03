@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { postBoardAction } from '../api';
+import { useProjectId } from '../project';
 import { clock } from '../derive';
 import type { BoardAction, Checkpoint, MissionBoardView, RunDetail, RunView } from '../types';
 
@@ -40,6 +41,7 @@ function Group({
  * is disabled with the reason on it rather than failing after the click.
  */
 export function MissionBoard({ run, board, onApplied }: Props) {
+  const projectId = useProjectId();
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +52,7 @@ export function MissionBoard({ run, board, onApplied }: Props) {
     setError(null);
     setDone(null);
     try {
-      const detail = await postBoardAction(run.runId, {
+      const detail = await postBoardAction(projectId, run.runId, {
         ...action,
         ...(note.trim() ? { note: note.trim() } : {}),
       });

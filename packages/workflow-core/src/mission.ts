@@ -1092,33 +1092,23 @@ export function missionStateForNode(def: WorkflowDefinition, run: RunState): Mis
   return 'INVESTIGATING';
 }
 
-// ---- output templates ----------------------------------------------------
+// ---- output contracts ------------------------------------------------------
 
-const TEMPLATE_BY_TYPE: Partial<Record<TaskType, string>> = {
-  'ui-change': 'ui-change.md',
-  'ux-change': 'ui-change.md',
-  'text-label': 'text-label.md',
-  'css-layout': 'css-layout.md',
-  'bug-fix': 'bug-report.md',
-  permission: 'permission-report.md',
-  authentication: 'permission-report.md',
-  authorization: 'permission-report.md',
-  security: 'permission-report.md',
-  research: 'research-report.md',
-  architecture: 'architecture-report.md',
-  refactor: 'refactor-report.md',
-  documentation: 'documentation-report.md',
-  migration: 'change-report.md',
-  release: 'release-note.md',
-  performance: 'change-report.md',
-  'small-feature': 'feature-report.md',
-  'medium-feature': 'feature-report.md',
-  'large-feature': 'feature-report.md',
+// Contracts live in `.claude/prompts/` and are read only when the user asked for
+// a document. One contract covers many task types on purpose: the shape of a
+// change report does not depend on whether the change was CSS or a cache.
+const PROMPT_BY_TYPE: Partial<Record<TaskType, string>> = {
+  'bug-fix': 'bug-report.prompt.md',
+  research: 'analysis-report.prompt.md',
+  architecture: 'decision-record.prompt.md',
+  migration: 'migration-plan.prompt.md',
+  release: 'release-note.prompt.md',
+  testing: 'test-report.prompt.md',
 };
 
-/** Report template for a task type. Feature reporting is the default shape. */
+/** Output contract for a task type. A change report is the default shape. */
 export function outputTemplateFor(taskType: TaskType): string {
-  return TEMPLATE_BY_TYPE[taskType] ?? 'implementation-report.md';
+  return PROMPT_BY_TYPE[taskType] ?? 'change-report.prompt.md';
 }
 
 // ---- board ---------------------------------------------------------------
